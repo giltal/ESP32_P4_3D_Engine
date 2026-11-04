@@ -26,38 +26,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "e3d_port.h"
 #include "e3d_mem.h"
 
-#ifdef E3D_HOST
-#include <time.h>
-#define E3D_FAST
-static int64_t now_us(void) { return (int64_t)clock() * 1000000 / CLOCKS_PER_SEC; }
-static void *alloc_fast(size_t n) { return malloc(n); }
-static void free_fast(void *p) { free(p); }
-static void *alloc_sram(size_t n) { (void)n; return NULL; }
-#else
-#include "papp/papp.h"
-#define E3D_FAST PAPP_FAST
-static int64_t now_us(void) { return papp_time_us(); }
-/* HP SRAM when there is room, else PSRAM. The internal heap also hands out
- * the P4's LP SRAM (0x5010_8000), which is uncached and far slower than
- * PSRAM through the caches, so a block there is given back. */
-static void *alloc_sram(size_t n)
-{
-    void *p = papp_alloc(n, PAPP_MEM_FAST, 64);
-    if (p && ((uintptr_t)p < 0x4FF00000u || (uintptr_t)p + n > 0x4FFC0000u)) {
-        papp_free(p);
-        p = NULL;
-    }
-    return p;
-}
-static void *alloc_fast(size_t n)
-{
-    void *p = alloc_sram(n);
-    return p ? p : papp_alloc(n, PAPP_MEM_ANY, 64);
-}
-static void free_fast(void *p) { papp_free(p); }
-#endif
+#define now_us     e3d_port_time_us
+#define alloc_sram e3d_port_alloc_sram
+#define alloc_fast e3d_port_alloc_any
+#define free_fast  e3d_port_free_aligned
 
 #define SRAM_CHUNKS  8             /* per thread: 8 x 6 KB */
 #define SRAM_RESERVE (40 * 1024)
@@ -183,9 +158,9 @@ struct e3d {
     float fog_zk;                  /* the density fog_z was made for */
     int threads;
     bool pie_light;                /* the PIE lighting kernel passed its check */
-#ifndef E3D_HOST
-    papp_thread_t *worker;
-    papp_sem_t *go, *done;
+#if E3D_PORT_THREADS
+    e3d_port_thread worker;
+    e3d_port_sem go, done;
 #endif
     volatile bool quit;
 };
@@ -198,14 +173,14 @@ static void geo_run(e3d_t *e, int tid);
 static bool light_batch_check(void);
 #endif
 
-#ifndef E3D_HOST
+#if E3D_PORT_THREADS
 static int worker_main(void *arg)
 {
     e3d_t *e = arg;
     /* only e3d_destroy ends it: leaving on an exit request would leave the
      * thread that draws waiting for its half of a frame */
     while (!e->quit) {
-        if (!papp_sem_take(e->go, 100))
+        if (!e3d_port_sem_take(e->go, 100))
             continue;
         if (e->quit)
             break;
@@ -213,7 +188,7 @@ static int worker_main(void *arg)
             raster(e, 1);
         else
             geo_run(e, 1);
-        papp_sem_give(e->done);
+        e3d_port_sem_give(e->done);
     }
     return 0;
 }
@@ -263,14 +238,12 @@ e3d_t *e3d_create(int width, int height, int threads)
 #if defined(__riscv_xesppie)
     e->pie_light = light_batch_check();
 #endif
-#ifndef E3D_HOST
-    if (threads > 1 && papp_if_thrd() && tile_alloc(&e->tile[1], width)) {
-        e->go = papp_sem_create(0, 1);
-        e->done = papp_sem_create(0, 1);
-        papp_thread_cfg_t cfg = { .name = "e3d_raster", .stack_size = 8192,
-                                  .prio = PAPP_PRIO_NORMAL, .core = 1 };
+#if E3D_PORT_THREADS
+    if (threads > 1 && e3d_port_threads_available() && tile_alloc(&e->tile[1], width)) {
+        e->go = e3d_port_sem_create();
+        e->done = e3d_port_sem_create();
         if (e->go && e->done)
-            e->worker = papp_thread_create(worker_main, e, &cfg);
+            e->worker = e3d_port_thread_start(worker_main, e, 1, 8192);
         if (e->worker)
             e->threads = 2;
     }
@@ -284,14 +257,14 @@ void e3d_destroy(e3d_t *e)
 {
     if (!e)
         return;
-#ifndef E3D_HOST
+#if E3D_PORT_THREADS
     if (e->worker) {
         e->quit = true;
-        papp_sem_give(e->go);
-        papp_thread_join(e->worker, PAPP_WAIT_FOREVER, NULL);
+        e3d_port_sem_give(e->go);
+        e3d_port_thread_join(e->worker);
     }
-    if (e->go) papp_sem_destroy(e->go);
-    if (e->done) papp_sem_destroy(e->done);
+    if (e->go) e3d_port_sem_destroy(e->go);
+    if (e->done) e3d_port_sem_destroy(e->done);
 #endif
     for (int k = 0; k < 2; k++) {
         geo_t *g = &e->geo[k];
@@ -426,7 +399,7 @@ void e3d_begin(e3d_t *e, uint16_t *pixels, int stride)
      * internal heap keeps SRAM_RESERVE free for the launcher and the app. */
     geo_t *gs = &e->geo[e->threads == 2 && e->geo[1].npool_sram < e->geo[0].npool_sram];
     if (gs->npool_sram < SRAM_CHUNKS &&
-        papp_mem_free_size(PAPP_MEM_FAST) > SRAM_RESERVE + sizeof(prim_t) * CHUNK) {
+        e3d_port_sram_free() > SRAM_RESERVE + sizeof(prim_t) * CHUNK) {
         prim_t *c = alloc_sram(sizeof(prim_t) * CHUNK);
         if (c && !pool_add(gs, c, true))
             free_fast(c);
@@ -1260,7 +1233,7 @@ static bool light_batch_check(void)
         }
         ok = worst <= 2;
         if (!ok)
-            papp_log("e3d: PIE lighting differs from C by %d, using C\n", worst);
+            E3D_LOG("PIE lighting differs from C by %d, using C", worst);
     }
     free(qn); free(a); free(b);
     return ok;
@@ -1935,15 +1908,15 @@ static void geo_run(e3d_t *e, int tid)
 /* task 0: geometry, 1: rasterising; on both cores when there are 2 threads */
 static void run(e3d_t *e, int task)
 {
-#ifndef E3D_HOST
+#if E3D_PORT_THREADS
     if (e->threads == 2) {
         e->task = task;
-        papp_sem_give(e->go);
+        e3d_port_sem_give(e->go);
         if (task)
             raster(e, 0);
         else
             geo_run(e, 0);
-        papp_sem_take(e->done, PAPP_WAIT_FOREVER);
+        e3d_port_sem_take(e->done, -1);
         return;
     }
 #endif

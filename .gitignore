@@ -1,3 +1,8 @@
 build/
 __pycache__/
 *.pyc
+# ESP-IDF example outputs
+examples/idf/*/build/
+examples/idf/*/sdkconfig
+examples/idf/*/sdkconfig.old
+examples/idf/*/managed_components/

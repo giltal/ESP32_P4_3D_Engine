@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draws demo/icon.png (88x88): a lit cube on a dark tile. No dependencies."""
+"""Draws examples/papp/demo/icon.png (88x88): a lit cube on a dark tile. No dependencies."""
 import os
 import struct
 import zlib
@@ -40,7 +40,7 @@ def main():
 
     png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", S, S, 8, 6, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
-    out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "demo", "icon.png")
+    out = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "examples", "papp", "demo", "icon.png")
     open(out, "wb").write(png)
     print(out)
 
