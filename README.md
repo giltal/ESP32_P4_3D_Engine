@@ -1,6 +1,6 @@
 # ESP32-P4 3D Engine
 
-**e3d** is a software 3D engine for the **ESP32-P4**. It draws lit, shadowed,
+**e3d** is a software 3D engine for the **ESP32-P4**, originaly developed by **Michael Blostien**. It draws lit, shadowed,
 depth-tested triangles into an RGB565 frame on both CPU cores, with the P4's PIE
 vector unit and no GPU. On a 400x240 frame it runs scenes of a few thousand triangles
 with shadows at about **60 fps**.
