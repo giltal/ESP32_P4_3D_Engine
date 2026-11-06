@@ -25,6 +25,7 @@ The repository also has:
 
 - A **Python converter** that turns STL and OBJ models into engine meshes.
 - **Five examples**, including a full demo show.
+- **A game**, [Shardwall](#a-game-shardwall): a 3D brick-breaker you can install on the launcher.
 - A **[user guide](docs/GUIDE.md)**.
 
 All the screenshots on this page come straight from a Guition JC1060P470C board (7"
@@ -251,6 +252,36 @@ panel bring-up with your board's.
 
 ---
 
+## A game: Shardwall
+
+<p align="center">
+  <img src="docs/images/shardwall.png" width="49%" alt="Shardwall: towers of bricks, a ball and a paddle on a lit floor, with shadows">
+  <img src="docs/images/shardwall_towers.png" width="49%" alt="A close-up of the stacked brick towers">
+</p>
+
+`game/shardwall` is a complete game on e3d: a brick-breaker in 3D, and the first community
+app of the [ESP32_P4_Launcher](https://github.com/giltal/ESP32_P4_Launcher). Install it from
+**Settings → Apps → Community**.
+
+- The wall is built of towers 1 to 3 bricks high. Break the bottom brick and the ones above
+  drop down.
+- Broken bricks burst into shards that bounce on the floor. Everything casts a shadow.
+- Power-ups: a wide paddle, three balls, a slower ball. Six levels that loop, faster each time.
+- The sound is synthesised in the game and played through the launcher's audio.
+- The paddle follows the board's paddle knob, your finger or the D-pad / left stick, whichever
+  moved last. A or a tap serves; START or the top-right corner pauses.
+
+It runs at the display's 67 fps on the Guition 7" board, and at 55 fps on the busiest level
+(90 bricks: 1.7k triangles plus 1.1k shadow triangles). Build it like the examples:
+
+```bash
+python game/shardwall/build.py          # -> build/shardwall/shardwall.papp
+```
+
+Pass `auto` to let the computer play, or `level N` to start at a level.
+
+---
+
 ## Quick start
 
 ```c
@@ -349,6 +380,8 @@ e3d/                          the engine, an ESP-IDF component
   src/e3d_render.c            the renderer: geometry, binning, rasterising, PIE kernels
   src/e3d_port.h              platform layer: ESP-IDF / PAPP / host
   src/e3d_mem.h               the engine's heap (PSRAM)
+game/
+  shardwall                   Shardwall, a 3D brick-breaker (a launcher community app)
 examples/
   papp/papp_common.py         shared PAPP build helper
   papp/demo                   the demo show
