@@ -10,6 +10,9 @@
  * D-pad or the left stick, whichever moved last.
  * Serve: A (or any face button), or tap the screen; it serves by itself after
  * a few seconds. Pause: START, SELECT or tap the top-right corner.
+ * Save: the pause menu's "Save game" keeps the level, score, lives and what is
+ * left of the wall in /sd/data/shardwall/save.txt; the title screen then offers
+ * "Continue". One save slot; it stays after a game over.
  *
  * Arguments: `auto` = the computer plays (attract mode, for testing),
  *            `level N` = start at level N (1..).
@@ -396,6 +399,102 @@ static void hiscore_io(bool save)
     }
 }
 
+/* ── Saved game: level, score, lives, ball speed and what is left of the wall ── */
+#define SAVE_PATH "/sd/data/shardwall/save.txt"
+static int   g_save_level = -1;      /* level of the saved game, -1 = none */
+static float g_msg_t;                /* "GAME SAVED" on the screen while > 0 */
+static const char *g_msg;
+
+static void save_peek(void)
+{
+    g_save_level = -1;
+    FILE *f = fopen(SAVE_PATH, "r");
+    if (!f)
+        return;
+    int lv;
+    if (fscanf(f, "SHARDWALL 1 level %d", &lv) == 1 && lv >= 0)
+        g_save_level = lv;
+    fclose(f);
+}
+
+/* false when there is nothing to save (game over) or the card cannot be written */
+static bool save_game(void)
+{
+    int level = g_level;
+    bool fresh = false;                  /* the wall is cleared: save the start of the next level */
+    if (g_state == ST_OVER || g_state == ST_TITLE || g_lives <= 0)
+        return false;
+    if (g_state == ST_CLEAR || g_bricks_left <= 0) {
+        level++;
+        fresh = true;
+    }
+    mkdir("/sd/data", 0777);
+    mkdir("/sd/data/shardwall", 0777);
+    FILE *f = fopen(SAVE_PATH, "w");
+    if (!f)
+        return false;
+    /* the ball in play counts as a life: continuing serves it again */
+    fprintf(f, "SHARDWALL 1 level %d score %d lives %d speed %d fresh %d\n", level, g_score, g_lives,
+            (int)g_speed, fresh);
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++) {
+            const cell_t *ce = &g_cell[r][c];
+            fprintf(f, "%d %06lx %06lx %06lx\n", fresh ? 0 : ce->n, (unsigned long)ce->rgb[0],
+                    (unsigned long)ce->rgb[1], (unsigned long)ce->rgb[2]);
+        }
+    bool ok = fclose(f) == 0;
+    if (ok)
+        g_save_level = level;
+    return ok;
+}
+
+static void serve(void);
+
+static bool load_game(void)
+{
+    FILE *f = fopen(SAVE_PATH, "r");
+    if (!f)
+        return false;
+    int level, score, lives, speed, fresh;
+    bool ok = fscanf(f, "SHARDWALL 1 level %d score %d lives %d speed %d fresh %d", &level, &score, &lives,
+                     &speed, &fresh) == 5 && level >= 0 && lives > 0;
+    if (ok) {
+        load_level(level);               /* colours, drop-in heights, speed */
+        if (!fresh) {
+            g_bricks_left = 0;
+            for (int r = 0; r < ROWS && ok; r++)
+                for (int c = 0; c < COLS && ok; c++) {
+                    cell_t *ce = &g_cell[r][c];
+                    int n;
+                    unsigned long rgb[TIERS];
+                    if (fscanf(f, "%d %lx %lx %lx", &n, &rgb[0], &rgb[1], &rgb[2]) != 4 || n < 0 || n > TIERS) {
+                        ok = false;
+                        break;
+                    }
+                    ce->n = n;
+                    for (int t = 0; t < TIERS; t++)
+                        ce->rgb[t] = (uint32_t)rgb[t] & 0xFFFFFF;
+                    g_bricks_left += n;
+                }
+            if (g_bricks_left <= 0)
+                ok = false;
+            if (speed >= 300 && speed <= 600)
+                g_speed = (float)speed;
+        }
+    }
+    fclose(f);
+    if (!ok) {
+        papp_log("shardwall: the saved game is damaged\n");
+        return false;
+    }
+    g_level = level;
+    g_score = score;
+    g_lives = lives;
+    serve();
+    papp_log("shardwall: continued at level %d, score %d, lives %d\n", level + 1, score, lives);
+    return true;
+}
+
 static void break_brick(int r, int c)
 {
     cell_t *ce = &g_cell[r][c];
@@ -556,6 +655,8 @@ static void power_up(int kind)
 static void update(float dt)
 {
     g_t += dt;
+    if (g_msg_t > 0)
+        g_msg_t -= dt;
     g_state_t += dt;
     if (g_shake > 0) g_shake = fmaxf(0, g_shake - dt * 20.f);
     if (g_flash > 0) g_flash = fmaxf(0, g_flash - dt * 2.f);
@@ -703,7 +804,8 @@ typedef struct {
 
 static uint32_t s_prev_btn;
 static int s_pot_ref = -1, s_touch_n;
-static float s_pot_z;
+static float s_pot_z, s_pot_mid = -1.f;   /* knob reading at the field's centre, -1 = not set */
+#define POT_GAIN 2.5f
 
 static actions_t read_input(papp_surface_t *surf, float dt)
 {
@@ -729,8 +831,17 @@ static actions_t read_input(papp_surface_t *surf, float dt)
         if (g_in != IN_POT)
             s_pot_ref = s_pot_ref + (pv - s_pot_ref) / 64;   /* follow slow drift */
         else {
-            s_pot_ref = pv;
-            float z = ((float)pv / 65535.f * 2.f - 1.f) * lim;
+            /* POT_GAIN: wall to wall takes 1/POT_GAIN of the knob's turn. Turning on past a wall
+               slides the centre along, so the paddle answers at once when the knob turns back. */
+            if (abs(pv - s_pot_ref) > 120)   /* a few ADC steps: no shimmer from its noise */
+                s_pot_ref = pv;
+            if (s_pot_mid < 0)
+                s_pot_mid = (float)s_pot_ref - g_pz / lim * (65535.f * 0.5f / POT_GAIN);
+            float z = ((float)s_pot_ref - s_pot_mid) / (65535.f * 0.5f / POT_GAIN) * lim;
+            if (z > lim || z < -lim) {
+                z = z > lim ? lim : -lim;
+                s_pot_mid = (float)s_pot_ref - z / lim * (65535.f * 0.5f / POT_GAIN);
+            }
             s_pot_z += (z - s_pot_z) * fminf(1.f, dt * 25.f);
             g_pz = s_pot_z;
         }
@@ -762,8 +873,10 @@ static actions_t read_input(papp_surface_t *surf, float dt)
         }
     }
     s_touch_n = n > 0 ? n : 0;
-    if (g_in != IN_POT)
+    if (g_in != IN_POT) {
         s_pot_z = g_pz;
+        s_pot_mid = -1.f;        /* the knob picks up from where the paddle is */
+    }
     return a;
 }
 
@@ -916,6 +1029,10 @@ static void draw_hud(uint16_t *px)
         if (((int)(g_t * 2.f)) & 1)
             text_c(px, 150, "PRESS A OR TAP TO PLAY", 0xFFFF, 1);
         text_c(px, 166, "KNOB  TOUCH  OR  PAD MOVES THE PADDLE", 0xA534, 1);
+        if (g_save_level >= 0) {
+            snprintf(line, sizeof(line), "SAVED GAME  LEVEL %d", g_save_level + 1);
+            text_c(px, 190, line, 0x07FF, 1);
+        }
         break;
     case ST_SERVE:
         if (!g_auto && g_state_t < 3.5f && (((int)(g_state_t * 3.f)) & 1) == 0)
@@ -932,6 +1049,8 @@ static void draw_hud(uint16_t *px)
             text_c(px, 156, "PRESS A OR TAP", 0xBDF7, 1);
         break;
     }
+    if (g_msg_t > 0 && g_msg)
+        text_c(px, 60, g_msg, 0x07FF, 2);
 }
 
 /* ── Presenting: a thread scales one frame with the PPA while the next is drawn ── */
@@ -953,18 +1072,55 @@ static int presenter_main(void *arg)
     return 0;
 }
 
-/* returns false to exit */
-static bool pause_menu(void)
+static int menu(const char *title, const char *const *items, int n)
 {
     papp_sem_take(g_pres_done, PAPP_WAIT_FOREVER);   /* nothing is being presented now */
-    static const char *const items[] = { "Resume", "Restart", "Exit" };
-    int r = papp_ui_menu("Shardwall", items, 3, 0);
+    int r = papp_ui_menu(title, items, n, 0);
     papp_sem_give(g_pres_done);
     papp_input_flush();
     s_prev_btn = ~0u;          /* ignore the buttons still held */
-    if (r == 1)
+    return r;
+}
+
+static void note(const char *msg)
+{
+    g_msg = msg;
+    g_msg_t = 2.f;
+}
+
+/* returns false to exit */
+static bool pause_menu(void)
+{
+    static const char *const items[] = { "Resume", "Save game", "Save and exit", "Restart", "Exit" };
+    int r = menu("Shardwall", items, 5);
+    if (r == 1 || r == 2) {
+        bool ok = save_game();
+        note(ok ? "GAME SAVED" : g_state == ST_OVER || g_lives <= 0 ? "NOTHING TO SAVE" : "COULD NOT SAVE");
+        if (ok && r == 2)
+            return false;
+    } else if (r == 3)
         new_game(0);
-    return r != 2 && !papp_exit_requested();
+    return r != 4 && !papp_exit_requested();
+}
+
+/* title screen: continue the saved game or start a new one */
+static void start_menu(int start_level)
+{
+    if (g_save_level < 0) {
+        new_game(start_level);
+        return;
+    }
+    char cont[32];
+    snprintf(cont, sizeof(cont), "Continue (level %d)", g_save_level + 1);
+    const char *const items[] = { cont, "New game" };
+    int r = menu("Shardwall", items, 2);
+    if (r == 0) {
+        if (!load_game()) {
+            note("SAVE DAMAGED");
+            new_game(start_level);
+        }
+    } else if (r == 1)
+        new_game(start_level);
 }
 
 int main(int argc, char **argv)
@@ -1030,6 +1186,7 @@ int main(int argc, char **argv)
     }
 
     hiscore_io(false);
+    save_peek();
     load_level(start_level);
     g_level = start_level;
     g_lives = 3;
@@ -1060,8 +1217,10 @@ int main(int argc, char **argv)
         bool go = act.start || act.touch_tap;
         if (g_state == ST_TITLE) {
             g_pz = 90.f * sinf(g_t * 0.8f);
-            if (go || act.pause)
-                new_game(start_level);
+            if (go || act.pause) {
+                start_menu(start_level);
+                last = papp_time_us();
+            }
         } else if (g_state == ST_SERVE && go && !g_auto)
             launch();
         else if (g_state == ST_OVER && go && g_state_t > 1.f)
