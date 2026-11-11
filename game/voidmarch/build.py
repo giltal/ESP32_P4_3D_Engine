@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tristrata PAPP:  python game/tristrata/build.py -> build/tristrata/tristrata.papp"""
+"""Voidmarch PAPP:  python game/voidmarch/build.py -> build/voidmarch/voidmarch.papp"""
 import os
 import sys
 
@@ -8,4 +8,4 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "example
 import papp_common  # noqa: E402
 
 if __name__ == "__main__":
-    print(papp_common.build("tristrata", HERE, ["main.c"]))
+    print(papp_common.build("voidmarch", HERE, ["main.c"]))
