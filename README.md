@@ -25,7 +25,8 @@ The repository also has:
 
 - A **Python converter** that turns STL and OBJ models into engine meshes.
 - **Five examples**, including a full demo show.
-- **A game**, [Shardwall](#a-game-shardwall): a 3D brick-breaker you can install on the launcher.
+- **Two games** you can install on the launcher: [Shardwall](#a-game-shardwall), a 3D
+  brick-breaker, and [Tristrata](#a-second-game-tristrata), invaders on three stacked decks.
 - A **[user guide](docs/GUIDE.md)**.
 
 All the screenshots on this page come straight from a Guition JC1060P470C board (7"
@@ -284,6 +285,39 @@ Pass `auto` to let the computer play, or `level N` to start at a level.
 
 ---
 
+## A second game: Tristrata
+
+<p align="center">
+  <img src="docs/images/tristrata.png" width="49%" alt="Tristrata: three stacked glass decks, each with a formation of invaders, bunkers and the ship on the bottom deck">
+  <img src="docs/images/tristrata_closeup.png" width="49%" alt="A close-up of the bottom deck: the ship, bunkers and an invader blowing up">
+</p>
+
+`game/tristrata` is a fixed shooter on three decks that hang one above the other. Each deck has
+its own formation of invaders, its own bunkers and now and then a saucer. The ship slides left
+and right and jumps between the decks, and it only shoots along the deck it is on, so the game
+is about keeping all three formations back at once.
+
+- A formation that reaches the ship's line costs a life and is pushed back. Clearing all three
+  decks ends the wave; the next one starts closer and marches faster. Extra ship at 1500 points,
+  then every 3000.
+- Three kinds of invader that change pose on each step of the march, fireballs and shards when
+  they blow up, a deck that flashes when it is cleared, and synthesised sound.
+- The camera stands far back with a long lens, so the three decks sit one above the other on
+  the screen without covering each other.
+- Pad: left/right moves, up/down changes deck, A or B fires. Touch: the ship follows your
+  finger, touching a deck jumps to it, and holding fires. START, SELECT or the top-right corner
+  pauses (Resume, Restart, Exit).
+
+It runs at 50 to 60 fps on the Guition 7" board (up to 2.6k triangles with all 54 invaders).
+
+```bash
+python game/tristrata/build.py          # -> build/tristrata/tristrata.papp
+```
+
+Pass `auto` to let the computer play, or `wave N` to start at a wave.
+
+---
+
 ## Quick start
 
 ```c
@@ -384,6 +418,7 @@ e3d/                          the engine, an ESP-IDF component
   src/e3d_mem.h               the engine's heap (PSRAM)
 game/
   shardwall                   Shardwall, a 3D brick-breaker (a launcher community app)
+  tristrata                   Tristrata, invaders on three stacked decks
 examples/
   papp/papp_common.py         shared PAPP build helper
   papp/demo                   the demo show
