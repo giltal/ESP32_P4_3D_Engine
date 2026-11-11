@@ -272,7 +272,7 @@ app of the [ESP32_P4_Launcher](https://github.com/giltal/ESP32_P4_Launcher). Ins
 - The paddle follows the board's paddle knob, your finger or the D-pad / left stick, whichever
   moved last. A or a tap serves; START or the top-right corner pauses.
 - The pause menu saves the game (level, score, lives and what is left of the wall, in
-  `/sd/data/shardwall/save.txt`); the title screen then offers Continue.
+  `/sd/data/shardwall/save.txt`) and loads it again; the title screen offers Continue.
 
 It runs at the display's 67 fps on the Guition 7" board, and at 55 fps on the busiest level
 (90 bricks: 1.7k triangles plus 1.1k shadow triangles). Build it like the examples:

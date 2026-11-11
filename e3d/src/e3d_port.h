@@ -14,6 +14,7 @@
  *   e3d_port_alloc_any(n)        64-aligned, anywhere
  *   e3d_port_free_aligned(p)     for both of the above
  *   e3d_port_sram_free()         free internal heap, in bytes
+ *   e3d_port_dma_free()          free DMA-capable internal heap (the SD card and Wi-Fi need some)
  *   e3d_port_ext_alloc/free      the engine's own heap (PSRAM when there is one),
  *                                16-byte aligned: PIE loads and stores need it
  *   E3D_PORT_THREADS             1 when there is a second core to run on
@@ -50,6 +51,7 @@ static inline void *e3d_port_alloc_sram(size_t n) { (void)n; return NULL; }
 static inline void *e3d_port_alloc_any(size_t n) { return malloc(n); }
 static inline void e3d_port_free_aligned(void *p) { free(p); }
 static inline size_t e3d_port_sram_free(void) { return 0; }
+static inline size_t e3d_port_dma_free(void) { return 0; }
 static inline void *e3d_port_ext_alloc(size_t n) { return malloc(n); }
 static inline void e3d_port_ext_free(void *p) { free(p); }
 
@@ -88,6 +90,7 @@ static inline void *e3d_port_alloc_any(size_t n)
 
 static inline void e3d_port_free_aligned(void *p) { heap_caps_free(p); }
 static inline size_t e3d_port_sram_free(void) { return heap_caps_get_free_size(MALLOC_CAP_INTERNAL); }
+static inline size_t e3d_port_dma_free(void) { return heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA); }
 
 static inline void *e3d_port_ext_alloc(size_t n)
 {
@@ -181,6 +184,7 @@ static inline void *e3d_port_alloc_any(size_t n)
 
 static inline void e3d_port_free_aligned(void *p) { papp_free(p); }
 static inline size_t e3d_port_sram_free(void) { return papp_mem_free_size(PAPP_MEM_FAST); }
+static inline size_t e3d_port_dma_free(void) { return papp_mem_free_size(PAPP_MEM_FAST | PAPP_MEM_DMA); }
 
 /* On the launcher, malloc puts blocks under 1 KB in internal SRAM */
 static inline void *e3d_port_ext_alloc(size_t n) { return papp_alloc(n, PAPP_MEM_LARGE, 16); }

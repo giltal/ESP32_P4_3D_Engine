@@ -12,7 +12,7 @@
  * a few seconds. Pause: START, SELECT or tap the top-right corner.
  * Save: the pause menu's "Save game" keeps the level, score, lives and what is
  * left of the wall in /sd/data/shardwall/save.txt; the title screen then offers
- * "Continue". One save slot; it stays after a game over.
+ * "Continue", and the pause menu "Load game". One save slot; it stays after a game over.
  *
  * Arguments: `auto` = the computer plays (attract mode, for testing),
  *            `level N` = start at level N (1..).
@@ -20,6 +20,7 @@
 #include "papp/papp.h"
 #include "e3d.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -430,7 +431,14 @@ static bool save_game(void)
     }
     mkdir("/sd/data", 0777);
     mkdir("/sd/data/shardwall", 0777);
-    FILE *f = fopen(SAVE_PATH, "w");
+    FILE *f = NULL;
+    for (int tries = 0; !f && tries < 3; tries++) {   /* the card can be busy for a moment */
+        f = fopen(SAVE_PATH, "w");
+        if (!f) {
+            papp_log("shardwall: save: open failed (errno %d, try %d)\n", errno, tries + 1);
+            papp_delay_ms(60);
+        }
+    }
     if (!f)
         return false;
     /* the ball in play counts as a life: continuing serves it again */
@@ -442,9 +450,12 @@ static bool save_game(void)
             fprintf(f, "%d %06lx %06lx %06lx\n", fresh ? 0 : ce->n, (unsigned long)ce->rgb[0],
                     (unsigned long)ce->rgb[1], (unsigned long)ce->rgb[2]);
         }
-    bool ok = fclose(f) == 0;
+    bool wr = !ferror(f);
+    bool ok = fclose(f) == 0 && wr;
     if (ok)
         g_save_level = level;
+    papp_log("shardwall: save level %d score %d lives %d: %s (state %d, errno %d)\n", level + 1, g_score, g_lives,
+             ok ? "ok" : "FAILED", g_state, errno);
     return ok;
 }
 
@@ -455,37 +466,42 @@ static bool load_game(void)
     FILE *f = fopen(SAVE_PATH, "r");
     if (!f)
         return false;
-    int level, score, lives, speed, fresh;
+    /* read it all first: a damaged file leaves the game being played as it is */
+    int level, score, lives, speed, fresh, total = 0;
+    static int n_in[ROWS][COLS];
+    static uint32_t rgb_in[ROWS][COLS][TIERS];
     bool ok = fscanf(f, "SHARDWALL 1 level %d score %d lives %d speed %d fresh %d", &level, &score, &lives,
                      &speed, &fresh) == 5 && level >= 0 && lives > 0;
-    if (ok) {
-        load_level(level);               /* colours, drop-in heights, speed */
-        if (!fresh) {
-            g_bricks_left = 0;
-            for (int r = 0; r < ROWS && ok; r++)
-                for (int c = 0; c < COLS && ok; c++) {
-                    cell_t *ce = &g_cell[r][c];
-                    int n;
-                    unsigned long rgb[TIERS];
-                    if (fscanf(f, "%d %lx %lx %lx", &n, &rgb[0], &rgb[1], &rgb[2]) != 4 || n < 0 || n > TIERS) {
-                        ok = false;
-                        break;
-                    }
-                    ce->n = n;
-                    for (int t = 0; t < TIERS; t++)
-                        ce->rgb[t] = (uint32_t)rgb[t] & 0xFFFFFF;
-                    g_bricks_left += n;
-                }
-            if (g_bricks_left <= 0)
+    for (int r = 0; r < ROWS && ok && !fresh; r++)
+        for (int c = 0; c < COLS && ok; c++) {
+            unsigned long rgb[TIERS];
+            int n;
+            if (fscanf(f, "%d %lx %lx %lx", &n, &rgb[0], &rgb[1], &rgb[2]) != 4 || n < 0 || n > TIERS) {
                 ok = false;
-            if (speed >= 300 && speed <= 600)
-                g_speed = (float)speed;
+                break;
+            }
+            n_in[r][c] = n;
+            for (int t = 0; t < TIERS; t++)
+                rgb_in[r][c][t] = (uint32_t)rgb[t] & 0xFFFFFF;
+            total += n;
         }
-    }
+    if (ok && !fresh && total <= 0)
+        ok = false;
     fclose(f);
     if (!ok) {
         papp_log("shardwall: the saved game is damaged\n");
         return false;
+    }
+    load_level(level);                   /* colours, drop-in heights, speed */
+    if (!fresh) {
+        for (int r = 0; r < ROWS; r++)
+            for (int c = 0; c < COLS; c++) {
+                g_cell[r][c].n = n_in[r][c];
+                memcpy(g_cell[r][c].rgb, rgb_in[r][c], sizeof(g_cell[r][c].rgb));
+            }
+        g_bricks_left = total;
+        if (speed >= 300 && speed <= 600)
+            g_speed = (float)speed;
     }
     g_level = level;
     g_score = score;
@@ -1091,16 +1107,32 @@ static void note(const char *msg)
 /* returns false to exit */
 static bool pause_menu(void)
 {
-    static const char *const items[] = { "Resume", "Save game", "Save and exit", "Restart", "Exit" };
-    int r = menu("Shardwall", items, 5);
-    if (r == 1 || r == 2) {
+    enum { A_RESUME, A_SAVE, A_LOAD, A_SAVE_EXIT, A_RESTART, A_EXIT };
+    char load[32];
+    const char *items[6];
+    int act[6], n = 0;
+    items[n] = "Resume";         act[n++] = A_RESUME;
+    items[n] = "Save game";      act[n++] = A_SAVE;
+    if (g_save_level >= 0) {     /* only when there is a saved game */
+        snprintf(load, sizeof(load), "Load game (level %d)", g_save_level + 1);
+        items[n] = load;         act[n++] = A_LOAD;
+    }
+    items[n] = "Save and exit";  act[n++] = A_SAVE_EXIT;
+    items[n] = "Restart";        act[n++] = A_RESTART;
+    items[n] = "Exit";           act[n++] = A_EXIT;
+    int r = menu("Shardwall", items, n);
+    int a = r >= 0 && r < n ? act[r] : A_RESUME;
+    if (a == A_SAVE || a == A_SAVE_EXIT) {
         bool ok = save_game();
         note(ok ? "GAME SAVED" : g_state == ST_OVER || g_lives <= 0 ? "NOTHING TO SAVE" : "COULD NOT SAVE");
-        if (ok && r == 2)
+        if (ok && a == A_SAVE_EXIT)
             return false;
-    } else if (r == 3)
+    } else if (a == A_LOAD) {
+        memset(g_shard, 0, sizeof(g_shard));   /* no shards left over from the game before */
+        note(load_game() ? "GAME LOADED" : "SAVE DAMAGED");
+    } else if (a == A_RESTART)
         new_game(0);
-    return r != 4 && !papp_exit_requested();
+    return a != A_EXIT && !papp_exit_requested();
 }
 
 /* title screen: continue the saved game or start a new one */
@@ -1254,10 +1286,11 @@ int main(int argc, char **argv)
             if (g_snd)
                 papp_audio_stats(g_snd, &as);
             papp_log("shardwall: %.1f fps, lv %d, bricks %d, tris %d + %d shadow, geom %d us, raster %d us, input %d, "
-                     "sound %s, played %lu, underruns %lu\n",
+                     "sound %s, played %lu, underruns %lu, sram %u (dma %u)\n",
                      (double)fps, g_level + 1, g_bricks_left, st->tris_drawn, st->shadow_tris, st->t_geom_us,
                      st->t_raster_us, g_in, g_snd ? "on" : "off", (unsigned long)as.played_frames,
-                     (unsigned long)as.underruns);
+                     (unsigned long)as.underruns, (unsigned)papp_mem_free_size(PAPP_MEM_FAST),
+                     (unsigned)papp_mem_free_size(PAPP_MEM_FAST | PAPP_MEM_DMA));
             log_t = now;
         }
         papp_sem_take(g_pres_done, PAPP_WAIT_FOREVER);

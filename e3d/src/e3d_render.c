@@ -36,6 +36,7 @@
 
 #define SRAM_CHUNKS  8             /* per thread: 8 x 6 KB */
 #define SRAM_RESERVE (40 * 1024)
+#define DMA_RESERVE  (48 * 1024)   /* of that, DMA-capable: SD card transfers and Wi-Fi buffers */
 #define NEAR    2.0f               /* view-space x of the near plane */
 #define TILE_H  16
 #define FOG_ZN  2048               /* fog factors by 1/x: 6 mantissa bits of each power of two */
@@ -396,10 +397,12 @@ void e3d_begin(e3d_t *e, uint16_t *pixels, int stride)
     e->stride = stride;
 #ifndef E3D_HOST
     /* One more SRAM chunk a frame, for the thread with fewer, while the
-     * internal heap keeps SRAM_RESERVE free for the launcher and the app. */
+     * internal heap keeps SRAM_RESERVE free for the launcher and the app, and
+     * DMA_RESERVE of it DMA-capable (without it, SD card reads fail). */
     geo_t *gs = &e->geo[e->threads == 2 && e->geo[1].npool_sram < e->geo[0].npool_sram];
     if (gs->npool_sram < SRAM_CHUNKS &&
-        e3d_port_sram_free() > SRAM_RESERVE + sizeof(prim_t) * CHUNK) {
+        e3d_port_sram_free() > SRAM_RESERVE + sizeof(prim_t) * CHUNK &&
+        e3d_port_dma_free() > DMA_RESERVE + sizeof(prim_t) * CHUNK) {
         prim_t *c = alloc_sram(sizeof(prim_t) * CHUNK);
         if (c && !pool_add(gs, c, true))
             free_fast(c);
