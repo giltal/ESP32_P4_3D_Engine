@@ -301,14 +301,20 @@ its zone at the near end of the plane: left and right, and forwards and back.
 - A formation that reaches the red line in front of your zone costs a life and is pushed back.
   Clear it to finish the wave; the next one starts closer and marches faster. Extra ship at
   1500 points, then every 3000.
+- From wave 2 some invaders come stacked, like Shardwall's towers of bricks: a shot takes the
+  bottom one and the rest drop down. It builds up gently: every other place of the back row on
+  wave 2, the whole back row on wave 3, one more row each wave up to three, and from wave 6
+  some back-row stacks three high.
 - Everything casts a shadow from the lamp. Hits blow up in fireballs and shards that bounce on
   the floor. The sound is synthesised in the game.
 - Pad: D-pad or left stick moves (up = forwards), A or B fires. Touch: the ship follows your
   finger, a little ahead of it, and holding fires. START, SELECT or the top-right corner
-  pauses (Resume, Restart, Exit).
+  pauses (Resume, Save game, Load game, Save and exit, Restart, Exit).
+- Save: one slot in `/sd/data/voidmarch/save.txt` keeps the wave, score, lives, the formation
+  and the bunkers. Load it from the pause menu, or choose Continue on the title screen.
 
 It runs at 50 to 60 fps on the Guition 7" board (1.9k triangles plus 1.3k shadow triangles with
-all 35 invaders), and at 60 fps on the 4.3".
+all 35 invaders; about 42 fps on wave 6 with the most stacks), and at 48 to 60 fps on the 4.3".
 
 ```bash
 python game/voidmarch/build.py          # -> build/voidmarch/voidmarch.papp

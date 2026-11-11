@@ -10,7 +10,14 @@
  *
  * A formation that reaches the line in front of your zone costs a life and is
  * pushed back. Clear it to finish the wave; the next one starts closer and
- * marches faster.
+ * marches faster. From wave 2 some invaders come stacked, two (later three)
+ * high, like Shardwall's towers: a shot takes the bottom one and the rest drop
+ * down. Gently: a few more stacks each wave, from the back rows forward.
+ *
+ * Save: the pause menu's "Save game" keeps the wave, score, lives, the
+ * formation and the bunkers in /sd/data/voidmarch/save.txt; "Load game" (pause
+ * menu) and "Continue" (title screen) bring it back. One slot; it stays after a
+ * game over.
  *
  * Pad: D-pad or left stick moves (up = forwards), A/B fires.
  * Touch: the ship follows the finger (a little ahead of it); holding fires.
@@ -57,6 +64,8 @@ PAPP_MANIFEST(.id = "giltal.voidmarch", .name = "Voidmarch", .version = PAPP_APP
 #define INV_HZ    15.f
 #define INV_HX    12.f
 #define INV_Y     17.f          /* centre height of an invader above the plane */
+#define STACK_H   21.f          /* height of one invader in a stack */
+#define MAX_STACK 3
 #define SHOT_Y    8.f
 #define MAX_PSHOTS 2
 #define MAX_ESHOTS 16
@@ -361,8 +370,9 @@ static const int kind_of_row[IROWS] = { KIND_DOME, KIND_DOME, KIND_WING, KIND_WI
 static const int kind_pts[NKINDS] = { 30, 20, 10 };
 
 typedef struct {
-    bool  alive[IROWS][ICOLS];
-    int   left;                 /* invaders alive */
+    uint8_t n[IROWS][ICOLS];    /* invaders stacked in each place, 0 = empty */
+    float fall[IROWS][ICOLS];   /* > 0: the stack is still dropping after its bottom one was shot */
+    int   left;                 /* places with invaders (the march speeds up as these thin out) */
     float x;                    /* x of the front row */
     float z;                    /* z of the formation's centre */
     float dir;                  /* +1 / -1 */
@@ -447,12 +457,23 @@ static void reset_bunkers(void)
             g_bunk[b][c] = (uint8_t)bcol_full(c);
 }
 
+/* stacks, gently: wave 2 = every other place of the back row two high, wave 3 =
+ * the whole back row, wave 4 = the back two rows, wave 5 on = the back three;
+ * from wave 6 every other place of the back row is three high */
+static int stack_of(int w, int r, int c)
+{
+    int rows = w < 2 ? w : (w - 1 < 3 ? w - 1 : 3);      /* stacked rows, from the back */
+    if (r < IROWS - rows || (w == 1 && (c & 1)))
+        return 1;
+    return w >= 5 && r == IROWS - 1 && (c & 1) ? 3 : 2;
+}
+
 static void load_wave(int w)
 {
     memset(&g_f, 0, sizeof(g_f));
     for (int r = 0; r < IROWS; r++)
         for (int c = 0; c < ICOLS; c++)
-            g_f.alive[r][c] = true;
+            g_f.n[r][c] = (uint8_t)stack_of(w, r, c);
     g_f.left = IROWS * ICOLS;
     g_f.x = 340.f - 9.f * (float)(w < 8 ? w : 8);
     g_f.z = -20.f;
@@ -566,6 +587,131 @@ static void hiscore_io(bool save)
     }
 }
 
+/* ── Saved game: wave, score, lives, the formation and the bunkers ───────── */
+#define SAVE_PATH "/sd/data/voidmarch/save.txt"
+static int   g_save_wave = -1;       /* wave of the saved game, -1 = none */
+static float g_msg_t;                /* "GAME SAVED" on the screen while > 0 */
+static const char *g_msg;
+
+static void note(const char *msg)
+{
+    g_msg = msg;
+    g_msg_t = 2.f;
+}
+
+static void save_peek(void)
+{
+    g_save_wave = -1;
+    FILE *f = fopen(SAVE_PATH, "r");
+    if (!f)
+        return;
+    int w;
+    if (fscanf(f, "VOIDMARCH 1 wave %d", &w) == 1 && w >= 0)
+        g_save_wave = w;
+    fclose(f);
+}
+
+/* false when there is nothing to save (title, game over) or the card cannot be written */
+static bool save_game(void)
+{
+    int wave = g_wave;
+    bool fresh = false;                  /* the wave is cleared: save the start of the next one */
+    if (g_state == ST_OVER || g_state == ST_TITLE || g_lives <= 0)
+        return false;
+    if (g_state == ST_CLEAR || g_f.left <= 0) {
+        wave++;
+        fresh = true;
+    }
+    mkdir("/sd/data", 0777);
+    mkdir("/sd/data/voidmarch", 0777);
+    FILE *f = fopen(SAVE_PATH, "w");
+    if (!f)
+        return false;
+    fprintf(f, "VOIDMARCH 1 wave %d score %d lives %d next %d fresh %d\n", wave, g_score, g_lives, g_next_life, fresh);
+    if (!fresh) {
+        /* a formation that has just landed was pushed back already */
+        fprintf(f, "form %d %d %d %d\n", (int)(g_f.x * 10.f), (int)(g_f.z * 10.f), g_f.dir > 0 ? 1 : -1,
+                (int)(g_f.drop * 10.f));
+        for (int r = 0; r < IROWS; r++) {
+            for (int c = 0; c < ICOLS; c++)
+                fprintf(f, "%d ", g_f.n[r][c]);
+            fputc('\n', f);
+        }
+        for (int b = 0; b < NBUNK; b++) {
+            for (int c = 0; c < BCOLS; c++)
+                fprintf(f, "%d ", g_bunk[b][c]);
+            fputc('\n', f);
+        }
+    }
+    bool ok = fclose(f) == 0;
+    if (ok)
+        g_save_wave = wave;
+    papp_log("voidmarch: %s wave %d, score %d, lives %d\n", ok ? "saved" : "could not save", wave + 1, g_score, g_lives);
+    return ok;
+}
+
+static bool load_game(void)
+{
+    FILE *f = fopen(SAVE_PATH, "r");
+    if (!f)
+        return false;
+    int wave, score, lives, next, fresh;
+    bool ok = fscanf(f, "VOIDMARCH 1 wave %d score %d lives %d next %d fresh %d", &wave, &score, &lives, &next,
+                     &fresh) == 5 && wave >= 0 && lives > 0 && lives <= 9;
+    if (ok) {
+        load_wave(wave);                 /* clears shots, the saucer, the bunkers */
+        if (!fresh) {
+            int x, z, dir, drop;
+            ok = fscanf(f, " form %d %d %d %d", &x, &z, &dir, &drop) == 4;
+            g_f.left = 0;
+            for (int r = 0; r < IROWS && ok; r++)
+                for (int c = 0; c < ICOLS && ok; c++) {
+                    int n;
+                    ok = fscanf(f, "%d", &n) == 1 && n >= 0 && n <= MAX_STACK;
+                    g_f.n[r][c] = ok ? (uint8_t)n : 0;
+                    g_f.left += ok && n > 0;
+                }
+            for (int b = 0; b < NBUNK && ok; b++)
+                for (int c = 0; c < BCOLS && ok; c++) {
+                    int n;
+                    ok = fscanf(f, "%d", &n) == 1 && n >= 0 && n <= bcol_full(c);
+                    g_bunk[b][c] = ok ? (uint8_t)n : 0;
+                }
+            if (ok && g_f.left > 0) {
+                g_f.x = (float)x * 0.1f;
+                g_f.z = (float)z * 0.1f;
+                g_f.dir = dir > 0 ? 1.f : -1.f;
+                g_f.drop = (float)drop * 0.1f;
+                if (g_f.x < LOSE_X + INV_HX + 10.f)
+                    g_f.x = LOSE_X + INV_HX + 10.f;
+            } else
+                ok = false;
+        }
+    }
+    fclose(f);
+    if (!ok) {
+        papp_log("voidmarch: the saved game is damaged\n");
+        return false;
+    }
+    memset(g_part, 0, sizeof(g_part));
+    memset(g_boom, 0, sizeof(g_boom));
+    memset(g_pop, 0, sizeof(g_pop));
+    g_shake = g_flash = 0;
+    g_wave = wave;
+    g_score = score;
+    if (g_score > g_hiscore)
+        g_hiscore = g_score;
+    g_lives = lives;
+    g_next_life = next > score ? next : score + 3000;
+    g_sz = 0;
+    g_sx = SHIP_X0 + 10.f;
+    g_state = ST_PLAY;
+    g_state_t = 0;
+    g_inv_t = 1.5f;                      /* the invaders hold their fire for a moment */
+    papp_log("voidmarch: continued at wave %d, score %d, lives %d\n", wave + 1, score, lives);
+    return true;
+}
+
 /* ── Rules ───────────────────────────────────────────────────────────────── */
 static void kill_ship(void)
 {
@@ -606,8 +752,12 @@ static bool hit_bunker(float z)
 
 static void kill_invader(int r, int c)
 {
-    g_f.alive[r][c] = false;
-    g_f.left--;
+    if (!g_f.n[r][c])
+        return;
+    if (--g_f.n[r][c] == 0)
+        g_f.left--;
+    else
+        g_f.fall[r][c] = STACK_H;     /* the ones above drop onto the plane */
     float x = inv_x(r), y = INV_Y, z = inv_z(c);
     boom(x, y, z, 20.f, 0.45f, 0xFFF0C0);
     spawn_parts(x, y, z, row_rgb(r), 8, 100.f, false);
@@ -634,12 +784,16 @@ static void update_form(float dt)
 {
     form_t *d = &g_f;
     if (d->hit_t > 0) d->hit_t -= dt;
+    for (int r = 0; r < IROWS; r++)
+        for (int c = 0; c < ICOLS; c++)
+            if (d->fall[r][c] > 0)
+                d->fall[r][c] = fmaxf(0.f, d->fall[r][c] - 160.f * dt);
     if (d->left <= 0)
         return;
     int c0 = ICOLS, c1 = -1, r0 = IROWS;
     for (int r = 0; r < IROWS; r++)
         for (int c = 0; c < ICOLS; c++)
-            if (d->alive[r][c]) {
+            if (d->n[r][c]) {
                 if (c < c0) c0 = c;
                 if (c > c1) c1 = c;
                 if (r < r0) r0 = r;
@@ -674,7 +828,7 @@ static void update_form(float dt)
     if (front - INV_HX < BUNK_X + BLK_HX)
         for (int r = 0; r < IROWS; r++)
             for (int c = 0; c < ICOLS; c++)
-                if (d->alive[r][c] && fabsf(inv_x(r) - BUNK_X) < INV_HX + BLK_HX)
+                if (d->n[r][c] && fabsf(inv_x(r) - BUNK_X) < INV_HX + BLK_HX)
                     for (int b = 0; b < NBUNK; b++)
                         for (int q = 0; q < BCOLS; q++)
                             if (g_bunk[b][q] && fabsf(bcol_z(b, q) - inv_z(c)) < INV_HZ + BLK_HZ) {
@@ -700,13 +854,13 @@ static void update_form(float dt)
             int c = 0, tries = 0;
             do
                 c = (int)(frand() * ICOLS) % ICOLS;
-            while (tries++ < 12 && !(d->alive[0][c] || d->alive[1][c] || d->alive[2][c] || d->alive[3][c] ||
-                                     d->alive[4][c]));
+            while (tries++ < 12 && !(d->n[0][c] || d->n[1][c] || d->n[2][c] || d->n[3][c] ||
+                                     d->n[4][c]));
             if (frand() < 0.4f) {
                 float bz = 1e9f;
                 for (int q = 0; q < ICOLS; q++)
                     for (int r = 0; r < IROWS; r++)
-                        if (d->alive[r][q]) {
+                        if (d->n[r][q]) {
                             if (fabsf(inv_z(q) - g_sz) < bz) {
                                 bz = fabsf(inv_z(q) - g_sz);
                                 c = q;
@@ -715,7 +869,7 @@ static void update_form(float dt)
                         }
             }
             for (int r = 0; r < IROWS; r++)
-                if (d->alive[r][c]) {
+                if (d->n[r][c]) {
                     for (int i = 0; i < MAX_ESHOTS; i++)
                         if (!g_es[i].alive) {
                             float v = 150.f + 9.f * (float)(g_wave < 10 ? g_wave : 10) + frand() * 40.f;
@@ -765,7 +919,7 @@ static void update(float dt)
             if (s->x + 6.f < ix - INV_HX || x0 - 6.f > ix + INV_HX)
                 continue;
             for (int c = 0; c < ICOLS; c++)
-                if (g_f.alive[r][c] && fabsf(s->z - inv_z(c)) < INV_HZ + 1.5f) {
+                if (g_f.n[r][c] && fabsf(s->z - inv_z(c)) < INV_HZ + 1.5f) {
                     kill_invader(r, c);
                     s->alive = false;
                     break;
@@ -1017,7 +1171,7 @@ static void auto_play(float dt, actions_t *a)
     float tz = g_sz, bd = 1e9f;
     for (int c = 0; c < ICOLS; c++)
         for (int r = 0; r < IROWS; r++)
-            if (g_f.alive[r][c]) {
+            if (g_f.n[r][c]) {
                 float z = inv_z(c) + g_f.dir * form_speed() * (inv_x(r) - g_sx) / 430.f;
                 if (fabsf(z - g_sz) < bd) {
                     bd = fabsf(z - g_sz);
@@ -1141,12 +1295,16 @@ static void draw_scene(e3d_t *e)
         int32_t col = (int32_t)row_rgb(r);
         float x = inv_x(r);
         for (int c = 0; c < ICOLS; c++) {
-            if (!g_f.alive[r][c])
-                continue;
             float bob = (g_f.pose ^ (c & 1)) ? 1.6f : 0.f;
-            float yaw = kind == KIND_SPIKE ? g_t * 120.f + (float)c * 30.f : (g_f.pose ? 12.f : -12.f);
-            m = mat_at(x, INV_Y + bob, inv_z(c), 0, yaw, 0, INV_SC, INV_SC, INV_SC);
-            draw_obj(e, m_inv[kind][g_f.pose], &m, col, kind == KIND_SPIKE ? E3D_FLAT : 0);
+            for (int t = 0; t < g_f.n[r][c]; t++) {
+                /* stacked ones sway the other way and are a lighter shade */
+                int pose = g_f.pose ^ (t & 1);
+                float yaw = kind == KIND_SPIKE ? g_t * 120.f + (float)c * 30.f + (float)t * 45.f : (pose ? 12.f : -12.f);
+                float y = INV_Y + bob + (float)t * STACK_H + (t ? g_f.fall[r][c] : 0.f);
+                m = mat_at(x, y, inv_z(c), 0, yaw, 0, INV_SC, INV_SC, INV_SC);
+                draw_obj(e, m_inv[kind][pose], &m, t ? (int32_t)mix_rgb((uint32_t)col, 0xFFFFFF, 0.3f * (float)t) : col,
+                         kind == KIND_SPIKE ? E3D_FLAT : 0);
+            }
         }
     }
 
@@ -1273,6 +1431,9 @@ static void draw_hud(uint16_t *px)
             }
         }
 
+    if (g_msg_t > 0 && g_msg)
+        text_c(px, 200, g_msg, 0x07FF, 2);
+
     switch (g_state) {
     case ST_TITLE:
         shade(px, 56, 176);
@@ -1281,6 +1442,10 @@ static void draw_hud(uint16_t *px)
         if (((int)(g_t * 2.f)) & 1)
             text_c(px, 140, "PRESS A OR TAP TO PLAY", 0xFFFF, 1);
         text_c(px, 156, "PAD OR TOUCH MOVES   A FIRES", 0xA534, 1);
+        if (g_save_wave >= 0) {
+            snprintf(line, sizeof(line), "SAVED GAME  WAVE %d", g_save_wave + 1);
+            text_c(px, 166, line, 0x9FFF, 1);
+        }
         break;
     case ST_PLAY:
         if (g_state_t < 2.f && g_inv_t > 0 && g_lives > 0) {
@@ -1324,18 +1489,59 @@ static int presenter_main(void *arg)
 }
 
 
-/* returns false to exit */
-static bool pause_menu(void)
+static int menu(const char *title, const char *const *items, int n)
 {
-    static const char *const items[] = { "Resume", "Restart", "Exit" };
     papp_sem_take(g_pres_done, PAPP_WAIT_FOREVER);   /* nothing is being presented now */
-    int r = papp_ui_menu("Voidmarch", items, 3, 0);
+    int r = papp_ui_menu(title, items, n, 0);
     papp_sem_give(g_pres_done);
     papp_input_flush();
     s_prev_btn = ~0u;          /* ignore the buttons still held */
-    if (r == 1)
+    return r;
+}
+
+/* returns false to exit */
+static bool pause_menu(void)
+{
+    enum { M_RESUME, M_SAVE, M_LOAD, M_SAVE_EXIT, M_RESTART, M_EXIT };
+    static const char *const items[] = { "Resume", "Save game", "Load game", "Save and exit", "Restart", "Exit" };
+    int r = menu("Voidmarch", items, 6);
+    if (r == M_SAVE || r == M_SAVE_EXIT) {
+        bool ok = save_game();
+        note(ok ? "GAME SAVED" : g_state == ST_OVER || g_state == ST_TITLE || g_lives <= 0 ? "NOTHING TO SAVE"
+                                                                                          : "COULD NOT SAVE");
+        if (ok && r == M_SAVE_EXIT)
+            return false;
+    } else if (r == M_LOAD) {
+        save_peek();
+        if (g_save_wave < 0)
+            note("NO SAVED GAME");
+        else if (load_game())
+            note("GAME LOADED");
+        else
+            note("SAVE DAMAGED");
+    } else if (r == M_RESTART)
         new_game(0);
-    return r != 2 && !papp_exit_requested();
+    return r != M_EXIT && !papp_exit_requested();
+}
+
+/* title screen: continue the saved game or start a new one */
+static void start_menu(int start_wave)
+{
+    if (g_save_wave < 0) {
+        new_game(start_wave);
+        return;
+    }
+    char cont[32];
+    snprintf(cont, sizeof(cont), "Continue (wave %d)", g_save_wave + 1);
+    const char *const items[] = { cont, "New game" };
+    int r = menu("Voidmarch", items, 2);
+    if (r == 0) {
+        if (!load_game()) {
+            note("SAVE DAMAGED");
+            new_game(start_wave);
+        }
+    } else if (r == 1)
+        new_game(start_wave);
 }
 
 static bool make_meshes(void)
@@ -1468,6 +1674,7 @@ int main(int argc, char **argv)
     }
 
     hiscore_io(false);
+    save_peek();
     load_wave(start_wave);
     g_wave = start_wave;
     g_lives = 3;
@@ -1486,6 +1693,8 @@ int main(int argc, char **argv)
         last = now;
         if (dt > 0.05f)
             dt = 0.05f;
+        if (g_msg_t > 0)
+            g_msg_t -= dt;
 
         actions_t act = read_input(g_surf, dt);
         if (act.pause && g_state != ST_TITLE) {
@@ -1498,7 +1707,7 @@ int main(int argc, char **argv)
             g_sz = 90.f * sinf(g_t * 0.8f);
             g_sx = SHIP_X0 + 20.f + 20.f * sinf(g_t * 0.5f);
             if (go)
-                new_game(start_wave);
+                start_menu(start_wave);
             else if (act.pause)
                 run = pause_menu();
         } else if (g_state == ST_OVER && go && g_state_t > 1.f)
