@@ -25,8 +25,9 @@ The repository also has:
 
 - A **Python converter** that turns STL and OBJ models into engine meshes.
 - **Five examples**, including a full demo show.
-- **Two games** you can install on the launcher: [Shardwall](#a-game-shardwall), a 3D
-  brick-breaker, and [Voidmarch](#a-second-game-voidmarch), a 3D invaders game.
+- **Three games** you can install on the launcher: [Shardwall](#a-game-shardwall), a 3D
+  brick-breaker, [Voidmarch](#a-second-game-voidmarch), a 3D invaders game, and
+  [Driftrock](#a-third-game-driftrock), rocks in space in 3D.
 - A **[user guide](docs/GUIDE.md)**.
 
 All the screenshots on this page come straight from a Guition JC1060P470C board (7"
@@ -324,6 +325,48 @@ Pass `auto` to let the computer play, or `wave N` to start at a wave.
 
 ---
 
+## A third game: Driftrock
+
+<p align="center">
+  <img src="docs/images/driftrock.png" width="49%" alt="Driftrock: tumbling lit rocks over a starfield, the ship in the middle, rocks breaking up">
+  <img src="docs/images/driftrock_saucer.png" width="49%" alt="A saucer with chasing rim lights crosses the field">
+</p>
+
+`game/driftrock` is a game of rocks in space, seen from above at an angle. The ship turns,
+thrusts and drifts on its momentum, and everything wraps from one edge of the field to the
+other; while something crosses an edge it is drawn on both sides.
+
+- The rocks are made in code: an icosahedron, subdivided once for the big and medium ones, with
+  every corner pushed in or out and a few broad dents, in six shapes and colours. They tumble and
+  are lit by a distant sun. A shot breaks a big rock into two medium ones, a medium one into two
+  small ones, and a small one into dust and sparks.
+- Saucers come by now and then: the big one fires anywhere, the small one aims, better on later
+  waves. Their shots break rocks too. Hyperspace takes the ship somewhere else on the field, and
+  landing on a rock is the end of it.
+- Big rock 20, medium 50, small 100, big saucer 200, small saucer 1000; an extra ship every
+  10000. Each wave brings one more big rock, up to 11, and they get faster.
+- A starfield with a band of haze and a ringed planet far below; a thrust flame and sparks,
+  fireballs and debris. The sound is synthesised in the game, with a beat that quickens as the
+  wave goes on.
+- Pad: left/right or the stick turn; up, A or R1 thrusts; B or X fires (hold for a stream);
+  down, Y or L1 jumps to hyperspace; START or SELECT pauses. Touch: touch the field and the ship
+  turns to that point and fires; THRUST and HYPER buttons at the bottom left; the top-right
+  corner pauses (Resume, Save game, Load game, Save and exit, Restart, Exit).
+- Save: one slot in `/sd/data/driftrock/save.txt` keeps the wave, score, lives and the rocks.
+  Load it from the pause menu, or choose Continue on the title screen.
+
+It runs at 60 fps on the Guition 7", the Guition 4.3" and the M5Stack Tab5 (wave 10: about 20
+rocks, 1k triangles).
+
+```bash
+python game/driftrock/build.py          # -> build/driftrock/driftrock.papp
+```
+
+Pass `auto` to let the computer play, `wave N` to start at a wave, or `saucer` for a saucer at
+once.
+
+---
+
 ## Quick start
 
 ```c
@@ -425,6 +468,7 @@ e3d/                          the engine, an ESP-IDF component
 game/
   shardwall                   Shardwall, a 3D brick-breaker (a launcher community app)
   voidmarch                   Voidmarch, a 3D invaders game
+  driftrock                   Driftrock, rocks in space in 3D
 examples/
   papp/papp_common.py         shared PAPP build helper
   papp/demo                   the demo show
