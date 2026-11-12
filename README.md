@@ -370,6 +370,8 @@ once.
 <p align="center">
   <img src="docs/images/dustline.png" width="49%" alt="Dustline: the rally car from behind on a dirt road through pines, wheel ruts, hills on the horizon">
   <img src="docs/images/dustline_gravel.png" width="49%" alt="The gravel section: a grey road with ruts, birches, hay bales and marker posts">
+  <img src="docs/images/dustline_start.png" width="49%" alt="The start gantry with spectators on both sides, clouds in the sky and the lake on the right">
+  <img src="docs/images/dustline_ghost.png" width="49%" alt="The ghost of the best lap ahead on the gravel, and the split time against it, +3.29 in red">
 </p>
 
 `game/dustline` is a rally stage against the clock: one car on a closed course through the
@@ -380,23 +382,26 @@ woods, three laps, seen from a chase camera.
   then loose gravel, then a tarmac chicane to the line. It is cut into chunks of 32 m, each a
   road mesh and a scenery mesh in two levels of detail; only the chunks in front are drawn.
 - The road is the floor layer, so the car's shadow falls on it. The grass, the sky and two
-  rows of hills on the horizon are drawn by the background row function, the hills by
-  heading, so they turn with the camera.
+  rows of hills and the clouds are drawn by the background row function, by heading, so they
+  turn with the camera. A lake beside the fast right is two more floor meshes (shore, water).
 - The car runs on a small tyre model at 240 Hz: a bicycle model with slip angles, a friction
   circle per axle, weight transfer, four-wheel drive (40/60), traction control and ABS that
   leave the tyres their side grip. The rear grips a little more than the front, so at the
   limit the car runs wide; the handbrake throws the tail out. Grip by surface: tarmac 1.05,
   dirt 0.8, gravel 0.7, verge 0.62, grass 0.5 (and drag).
 - Pines, birches, rocks, hay bales on the outside of the sharp corners, marker posts and the
-  start gantry; you bounce off them. Dust behind the wheels on the loose stuff. A map of the
+  start gantry; you bounce off them. Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
   course, lap and race times, the best lap, speed, gear and the surface.
 - The engine, tyre noise and gravel rumble are synthesised in the game.
 - Controls: the 4.3" board's roller (paddle) steers; it is centred where it is when a race
   starts (pause menu: Centre steering). Pad left/right or the stick steer too. A gas, B brake
   and reverse, X handbrake, Y back on the road, START pause. Touch: arrows at the bottom left,
   GAS and BRAKE at the bottom right, the top-right corner pauses.
-- Records: best lap and best race in `/sd/data/dustline/records.txt`. Save race / Load race /
-  Save and exit in the pause menu (`/sd/data/dustline/save.txt`); Continue on the title.
+- Records: best lap and best race (3 laps) in `/sd/data/dustline/records.txt`. Save race and
+  Save and exit in the pause menu (`/sd/data/dustline/save.txt`); Continue on the title loads it.
+- Ghost: the best lap drives along as a blue outline (`/sd/data/dustline/ghost.bin`, a pose every
+  0.1 s); at a quarter, half and three quarters of the lap the split against it shows under the
+  times, red when behind. Pause menu: Ghost on/off.
 
 It runs at 55-60 fps on the Guition 4.3" (about 700-1300 triangles drawn of 4-8k sent).
 
@@ -404,7 +409,8 @@ It runs at 55-60 fps on the Guition 4.3" (about 700-1300 triangles drawn of 4-8k
 python game/dustline/build.py           # -> build/dustline/dustline.papp
 ```
 
-Pass `auto` to let the computer drive (its times do not count, unless `rec`), `laps N`, or
+Pass `auto` to let the computer drive (its times do not count, unless `rec`; B slows it down, to
+see the ghost pull away), `laps N` (race records count for 3 laps only), or
 `fps` to show the frame rate.
 
 ---

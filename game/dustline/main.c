@@ -2365,10 +2365,11 @@ static int menu(const char *title, const char *const *items, int n)
 /* returns false to exit */
 static bool pause_menu(void)
 {
-    enum { M_RESUME, M_CENTRE, M_GHOST, M_SAVE, M_LOAD, M_SAVE_EXIT, M_RESTART, M_EXIT };
-    const char *const items[] = { "Resume", "Centre steering", g_ghost_on ? "Ghost: on" : "Ghost: off", "Save race", "Load race",
+    /* papp_ui_menu shows 7 items at most; a saved race is loaded by Continue on the title */
+    enum { M_RESUME, M_CENTRE, M_GHOST, M_SAVE, M_SAVE_EXIT, M_RESTART, M_EXIT };
+    const char *const items[] = { "Resume", "Centre steering", g_ghost_on ? "Ghost: on" : "Ghost: off", "Save race",
                                   "Save and exit", "Restart race", "Exit" };
-    int r = menu("Dustline", items, 8);
+    int r = menu("Dustline", items, 7);
     if (r == M_GHOST) {
         g_ghost_on = !g_ghost_on;
         note(g_ghost_on ? "GHOST ON" : "GHOST OFF");
@@ -2381,14 +2382,6 @@ static bool pause_menu(void)
         note(ok ? "RACE SAVED" : (g_state != ST_RACE && g_state != ST_COUNT) ? "NOTHING TO SAVE" : "COULD NOT SAVE");
         if (ok && r == M_SAVE_EXIT)
             return false;
-    } else if (r == M_LOAD) {
-        save_peek();
-        if (g_save_lap < 0)
-            note("NO SAVED RACE");
-        else if (load_race())
-            note("RACE LOADED");
-        else
-            note("SAVE DAMAGED");
     } else if (r == M_RESTART)
         new_race();
     return r != M_EXIT && !papp_exit_requested();
