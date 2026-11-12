@@ -23,8 +23,8 @@
  * START or SELECT = pause. Touch: arrows at the bottom left, GAS and BRAKE at
  * the bottom right, the top-right corner pauses.
  *
- * Arguments: `auto` = the computer drives (for testing; no records),
- *            `icon` = a still close-up for the icon, `laps N`.
+ * Arguments: `auto` = the computer drives (for testing; no records, `rec` = they count),
+ *            `icon` = a still close-up for the icon, `laps N`, `fps` = show the frame rate.
  */
 #include "papp/papp.h"
 #include "e3d.h"
@@ -938,10 +938,8 @@ static void car_step(car_t *c, const drive_t *in, float dt)
     fx_r = long_room(fx_r, cap_r, c->pr, in->hand);
     float lim_f = sqrtf(fmaxf(0, cap_f * cap_f - fx_f * fx_f));
     float lim_r = sqrtf(fmaxf(0, cap_r * cap_r - fx_r * fx_r));
-    /* past the peak the tyre lets go a little (a slide stays a slide) */
-    float fy_f = -CAR_CF * af, fy_r = -CAR_CR * ar;
-    if (fabsf(fy_f) > lim_f) fy_f = copysignf(lim_f * 0.92f, fy_f);
-    if (fabsf(fy_r) > lim_r) fy_r = copysignf(lim_r * 0.95f, fy_r);
+    /* linear up to what the friction circle leaves, flat past it */
+    float fy_f = clampf(-CAR_CF * af, -lim_f, lim_f), fy_r = clampf(-CAR_CR * ar, -lim_r, lim_r);
 
     /* forces on the body */
     float fx = fx_f * cosf(d) - fy_f * sinf(d) + fx_r;
@@ -979,7 +977,7 @@ static void car_step(car_t *c, const drive_t *in, float dt)
     c->vl = vl;
     c->ax_s += (ax - c->ax_s) * fminf(1.f, dt * 5.f);
     c->ay_s += (ay - c->ay_s) * fminf(1.f, dt * 5.f);
-    c->slip = fabsf(ar) * 3.f + (fabsf(fy_r) >= lim_r * 0.87f && speed > 4.f ? 0.5f : 0.f);
+    c->slip = fabsf(ar) * 3.f + (fabsf(fy_r) >= lim_r * 0.99f && speed > 4.f ? 0.5f : 0.f);
     c->spin += vf * dt / 0.33f * DEG;
     if (c->spin > 3600.f || c->spin < -3600.f)
         c->spin = fmodf(c->spin, 360.f);
@@ -1049,7 +1047,7 @@ static float g_lap_times[9];
 static float g_best_lap = 0, g_best_race = 0;   /* records, 0 = none */
 static bool  g_new_lap_rec, g_new_race_rec;
 static float g_wrong_t, g_off_t, g_stuck_t;
-static bool  g_auto, g_icon;
+static bool  g_auto, g_icon, g_auto_rec, g_show_fps;   /* g_auto_rec: the computer's times count (testing) */
 static float g_msg_t;
 static const char *g_msg;
 static float g_shake;
@@ -1068,7 +1066,7 @@ static void note(const char *msg)
 
 static void records_io(bool save)
 {
-    if (save && g_auto)
+    if (save && g_auto && !g_auto_rec)
         return;
     if (save) {
         mkdir("/sd/data", 0777);
@@ -1241,7 +1239,7 @@ static void finish_lap(void)
         g_lap_times[g_lap] = lt;
     g_last_lap_t = lt;
     g_split_t = 3.f;
-    bool rec = !g_auto && (g_best_lap <= 0 || lt < g_best_lap);
+    bool rec = (!g_auto || g_auto_rec) && (g_best_lap <= 0 || lt < g_best_lap);
     if (rec) {
         g_best_lap = lt;
         g_new_lap_rec = true;
@@ -1253,7 +1251,7 @@ static void finish_lap(void)
     if (g_lap >= g_laps) {
         g_state = ST_FINISH;
         g_state_t = 0;
-        bool rrec = !g_auto && (g_best_race <= 0 || g_race_t < g_best_race);
+        bool rrec = (!g_auto || g_auto_rec) && (g_best_race <= 0 || g_race_t < g_best_race);
         if (rrec) {
             g_best_race = g_race_t;
             g_new_race_rec = true;
@@ -1351,7 +1349,7 @@ static actions_t read_input(papp_surface_t *surf, float dt)
         }
         s_pot_f += ((float)pv - s_pot_f) * fminf(1.f, dt * 30.f);
         s_pot_raw = pv;
-        if (!s_pot_live && fabsf(s_pot_f - s_pot_ref) > 2500.f) {
+        if (!s_pot_live && fabsf(s_pot_f - s_pot_ref) > 1500.f) {
             s_pot_live = true;
             papp_log("dustline: roller in use (%d, centre %d)\n", pv, (int)s_pot_mid);
         }
@@ -1966,8 +1964,8 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
     }
     if (g_msg_t > 0 && g_msg)
         text_c(px, 140, g_msg, 0x07FF, 2);
-    if (g_auto) {
-        snprintf(line, sizeof(line), "AUTO %.0f FPS", (double)fps);
+    if (g_show_fps) {
+        snprintf(line, sizeof(line), "%.0f FPS", (double)fps);
         text_at(px, 134, 3, line, 0x07E0, 1);
     }
 }
@@ -2145,6 +2143,10 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "auto"))
             g_auto = true;
+        else if (!strcmp(argv[i], "fps"))
+            g_show_fps = true;
+        else if (!strcmp(argv[i], "rec"))
+            g_auto_rec = true;
         else if (!strcmp(argv[i], "icon"))
             g_icon = true;
         else if (!strcmp(argv[i], "laps") && i + 1 < argc)
