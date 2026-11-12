@@ -1427,7 +1427,7 @@ static void control_ship(const actions_t *a, float dt)
 
 /* ── Drawing ─────────────────────────────────────────────────────────────── */
 static e3d_mesh *m_rock[3][NSHAPES], *m_ship, *m_flame, *m_engine, *m_pshot, *m_ushot, *m_part, *m_boom, *m_ufo,
-                *m_ufo_dome, *m_ufo_lights, *m_planet, *m_ring, *m_edge_x, *m_edge_z;
+                *m_ufo_dome, *m_ufo_lights, *m_planet, *m_ring;
 
 /* starfield: a few stars per row, made beforehand (the row function may only
  * write its row); a faint band of nebula across the sky */
@@ -1579,18 +1579,6 @@ static void draw_scene(e3d_t *e)
         draw_obj(e, m_planet, &m, -1, 0);
         m = mat_at(px, py, pz, 24.f, 0, -18.f, 1, 1, 1);
         draw_obj(e, m_ring, &m, -1, E3D_DOUBLE_SIDED);
-    }
-
-    /* the edges of the field: a faint glow where things wrap */
-    if (!g_icon) {
-        float pulse = 0.25f + 0.08f * sinf(g_t * 2.f);
-        int32_t c = (int32_t)mix_rgb(0, 0x3080FF, pulse);
-        m = mat_at(FXC, -14.f, -FZH, 0, 0, 0, 1, 1, 1);
-        draw_obj(e, m_edge_x, &m, c, E3D_UNLIT);
-        m = mat_at(FXC, -14.f, FZH, 0, 0, 0, 1, 1, 1);
-        draw_obj(e, m_edge_x, &m, c, E3D_UNLIT);
-        m = mat_at(FX1, -14.f, 0, 0, 0, 0, 1, 1, 1);
-        draw_obj(e, m_edge_z, &m, c, E3D_UNLIT);
     }
 
     for (int i = 0; i < MAX_ROCKS; i++)
@@ -1914,10 +1902,8 @@ static bool make_meshes(void)
             m_planet->tris[i].b = (uint8_t)c;
         }
     m_ring = ring(190.f, 265.f, 40, 0xA89070);
-    m_edge_x = box(FLX * 0.5f, 0.6f, 0.9f);
-    m_edge_z = box(0.9f, 0.6f, FZH);
     return m_ship && m_ufo && m_ufo_dome && m_ufo_lights && m_flame && m_engine && m_pshot && m_ushot && m_part && m_boom &&
-           m_planet && m_ring && m_edge_x && m_edge_z;
+           m_planet && m_ring;
 }
 
 static void free_meshes(void)
@@ -1926,7 +1912,7 @@ static void free_meshes(void)
         for (int k = 0; k < NSHAPES; k++)
             e3d_mesh_free(m_rock[s][k]);
     e3d_mesh *all[] = { m_ship, m_flame, m_engine, m_pshot, m_ushot, m_part, m_boom, m_ufo, m_ufo_dome, m_ufo_lights,
-                        m_planet, m_ring, m_edge_x, m_edge_z };
+                        m_planet, m_ring };
     for (unsigned i = 0; i < sizeof(all) / sizeof(all[0]); i++)
         e3d_mesh_free(all[i]);
 }
