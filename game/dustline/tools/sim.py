@@ -16,9 +16,9 @@ def cdef(name):
 P = {k: cdef(k) for k in ["CAR_M", "CAR_I", "CAR_A", "CAR_B", "CAR_CF", "CAR_CR", "CAR_POWER", "CAR_FMAX",
                           "CAR_DRAG", "CAR_BRAKE", "CAR_STEER"]}
 # as in main.c: SAT_* = side force kept past the peak, RG = rear grip, DF = front drive share,
-# TC / ABS = least share of grip left to drive / brakes, WT = weight transfer, BB = front brake share
+# RGL = rear grip on the loose surfaces, TC / ABS = least share of grip left to drive / brakes, WT = weight transfer, BB = front brake share
 P.update(dict(SAT_F=1.0, SAT_R=1.0, AUTO_MU=0.6, AUTO_K=2.6, AUTO_SLIDE=1.2, HAND=0.45, WT=0.55, BB=0.6, YD=0.0,
-              ABS=0.5, HOR=45, RG=1.15, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08))
+              ABS=0.5, HOR=45, RG=1.15, RGL=1.15, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08))
 for a in sys.argv[1:]:
     k, v = a.split("=")
     P[k] = float(v)
@@ -111,7 +111,7 @@ def step(c, steer, gas, brake, hand, dt):
     vla = vl + A * c.r
     wl = vla * math.cos(d) - vf * math.sin(d); wf = vf * math.cos(d) + vla * math.sin(d)
     af = math.atan2(wl, max(abs(wf), 1.5)); ar = math.atan2(vl - Bb * c.r, max(abs(vf), 1.5))
-    capf = mu * nf; capr = mu * nr * P["RG"] * (P["HAND"] if hand else 1)
+    capf = mu * nf; capr = mu * nr * (P["RG"] if c.surf == 0 else P["RGL"]) * (P["HAND"] if hand else 1)
     pf = getattr(c, "pf", 0.0); pr = getattr(c, "pr", 0.0)
     def lim(fx, cap, py, hb=False):
         if hb: return clamp(fx, -cap, cap)
