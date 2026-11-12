@@ -495,7 +495,7 @@ static float lateral(int k, float x, float z)
 }
 
 /* ── Scenery: trees, rocks, marker posts, the start gantry ───────────────── */
-enum { OBJ_PINE, OBJ_BIRCH, OBJ_ROCK, OBJ_POST, OBJ_PILLAR, OBJ_HAY };
+enum { OBJ_PINE, OBJ_BIRCH, OBJ_ROCK, OBJ_POST, OBJ_PILLAR, OBJ_HAY, OBJ_FAN };
 typedef struct { float x, z, r, s, rot; uint8_t kind, chunk; } prop_t;
 #define MAX_PROPS 1400
 static prop_t g_prop[MAX_PROPS];
@@ -535,6 +535,40 @@ static void add_prop(float x, float z, int kind, float s, float r)
     g_prop[g_nprops++] = (prop_t){ x, z, r, s, rnd() * 6.2832f, (uint8_t)kind, (uint8_t)(k / CHUNK) };
 }
 
+/* the lake inside the loop: an ellipse with a wavy shore (radius scale by angle) */
+#define LAKE_X  280.f
+#define LAKE_Z  80.f
+#define LAKE_RX 45.f
+#define LAKE_RZ 26.f
+static float lake_shore(float a)
+{
+    return 1.f + 0.10f * sinf(a * 3.f + 0.7f) + 0.06f * sinf(a * 7.f + 2.1f);
+}
+/* < 1 inside the lake (its shore scaled by margin) */
+static float lake_dist(float x, float z, float margin)
+{
+    float u = (x - LAKE_X) / LAKE_RX, v = (z - LAKE_Z) / LAKE_RZ;
+    return sqrtf(u * u + v * v) / (lake_shore(atan2f(v, u)) * margin);
+}
+#define LAKE_SEG 40
+static void lake_point(int i, float scale, float *x, float *z)
+{
+    float a = 6.2832f * (float)i / (float)LAKE_SEG, r = lake_shore(a) * scale;
+    *x = LAKE_X + cosf(a) * LAKE_RX * r;
+    *z = LAKE_Z + sinf(a) * LAKE_RZ * r;
+}
+/* the least gap between the shore and the road (logged: keep it well clear) */
+static float lake_gap(void)
+{
+    float g = 1e9f, x, z;
+    for (int i = 0; i < LAKE_SEG; i++) {
+        lake_point(i, 1.08f, &x, &z);
+        g = fminf(g, road_gap(x, z));
+    }
+    return g;
+}
+
+static int g_fan_groups;
 static void place_props(void)
 {
     g_nprops = 0;
@@ -575,7 +609,7 @@ static void place_props(void)
                 float off = t->hw + VERGE_W + 3.f + rnd() * rnd() * 34.f;
                 float x = t->x + rx * off * (float)side + (rnd() - 0.5f) * 4.f;
                 float z = t->z + rz * off * (float)side + (rnd() - 0.5f) * 4.f;
-                if (road_gap(x, z) < VERGE_W + 2.5f)
+                if (road_gap(x, z) < VERGE_W + 2.5f || lake_dist(x, z, 1.5f) < 1.f)
                     continue;
                 float u = rnd();
                 if (u < 0.12f)
@@ -584,6 +618,36 @@ static void place_props(void)
                     add_prop(x, z, u < 0.32f ? OBJ_BIRCH : OBJ_PINE, 0.8f + rnd() * 0.6f, 0.7f);
             }
     }
+    /* spectators: a group behind the outside of each tight corner, and at the start */
+    int last = -1000;
+    for (int k = 2; k < g_ns - 2; k++) {
+        const samp_t *t = &g_tr[k];
+        float ac = fabsf(t->curv);
+        if (ac < 1.f / 32.f || ac < fabsf(g_tr[k - 2].curv) || ac < fabsf(g_tr[k + 2].curv) || k - last < 50)
+            continue;
+        last = k;
+        float rx, rz;
+        samp_right(t, &rx, &rz);
+        float side = t->curv > 0 ? -1.f : 1.f;
+        int n = 0;
+        for (int i = 0; i < 9 && n < 6; i++) {
+            float along = (rnd() - 0.5f) * 16.f, off = t->hw + VERGE_W + 4.5f + rnd() * 3.f;
+            float x = t->x + rx * off * side + t->tx * along, z = t->z + rz * off * side + t->tz * along;
+            if (road_gap(x, z) < VERGE_W + 3.5f)
+                continue;
+            add_prop(x, z, OBJ_FAN, 0.9f + rnd() * 0.2f, 0.4f);
+            n++;
+        }
+        g_fan_groups++;
+    }
+    for (int side = -1; side <= 1; side += 2)
+        for (int i = 0; i < 5; i++) {
+            float rx, rz;
+            samp_right(&g_tr[0], &rx, &rz);
+            float off = (g_tr[0].hw + VERGE_W + 5.f + rnd() * 3.f) * (float)side, along = -14.f + (float)i * 6.f + rnd() * 2.f;
+            add_prop(g_tr[0].x + rx * off + g_tr[0].tx * along, g_tr[0].z + rz * off + g_tr[0].tz * along, OBJ_FAN,
+                     0.9f + rnd() * 0.2f, 0.4f);
+        }
     /* the grid */
     g_gx0 = g_bx0 - 60.f;
     g_gz0 = g_bz0 - 60.f;
@@ -617,7 +681,8 @@ static void place_props(void)
         }
     }
     free(cnt);
-    papp_log("dustline: %d props, grid %dx%d\n", g_nprops, g_gw, g_gh);
+    papp_log("dustline: %d props, %d spectator groups, lake %.0f m from the road, grid %dx%d\n", g_nprops, g_fan_groups,
+             (double)lake_gap(), g_gw, g_gh);
 }
 
 /* ── Chunk meshes ────────────────────────────────────────────────────────── */
@@ -627,7 +692,7 @@ typedef struct {
 } chunk_t;
 static chunk_t g_chunk[MAX_CHUNKS];
 static int     g_nchunks;
-static e3d_mesh *m_gantry;
+static e3d_mesh *m_gantry, *m_lake[2];        /* the lake: [0] its muddy shore, [1] the water */
 
 static const uint32_t road_rgb[3][2] = { { 0x56565C, 0x5E5E63 }, { 0xA27A50, 0x9A744C }, { 0x9E968A, 0x958E82 } };
 static const uint32_t verge_rgb[3]   = { 0x7C8450, 0x7E6A44, 0x857C68 };
@@ -743,6 +808,13 @@ static void b_tree(const prop_t *p, bool far)
     } else if (p->kind == OBJ_POST && !far) {
         b_box(p->x - 0.1f, 0, p->z - 0.1f, p->x + 0.1f, 1.0f, p->z + 0.1f, 0xF0F0F0);
         b_box(p->x - 0.11f, 0.7f, p->z - 0.11f, p->x + 0.11f, 0.9f, p->z + 0.11f, 0xE03020);
+    } else if (p->kind == OBJ_FAN && !far) {
+        static const uint32_t shirt[] = { 0xD03030, 0x2E5CC8, 0xE8C020, 0xF0F0F0, 0x30A050, 0xE07018 };
+        float s = p->s, x = p->x, z = p->z;
+        b_box(x - 0.16f * s, 0, z - 0.2f * s, x + 0.16f * s, 0.85f * s, z + 0.2f * s, 0x3A3E50);
+        b_box(x - 0.2f * s, 0.85f * s, z - 0.26f * s, x + 0.2f * s, 1.5f * s, z + 0.26f * s,
+              shirt[(int)(p->rot * 10.f) % 6]);
+        b_box(x - 0.13f * s, 1.52f * s, z - 0.13f * s, x + 0.13f * s, 1.8f * s, z + 0.13f * s, 0xE0B090);
     } else if (p->kind == OBJ_HAY && !far) {
         float c = cosf(p->rot), s2 = sinf(p->rot);
         (void)s2;
@@ -812,7 +884,20 @@ static bool build_chunks(void)
         }
     }
     m_gantry = b_bake(1.f);
-    return m_gantry != NULL;
+    for (int l = 0; l < 2; l++) {
+        b_reset();
+        int c0 = b_v(LAKE_X, 0, LAKE_Z);
+        for (int i = 0; i < LAKE_SEG; i++) {
+            float x, z;
+            lake_point(i, l ? 1.f : 1.08f, &x, &z);
+            b_v(x, 0, z);
+        }
+        float ctr[3] = { LAKE_X, -5.f, LAKE_Z };   /* below: the faces point up */
+        for (int i = 0; i < LAKE_SEG; i++)
+            b_tri(c0, c0 + 1 + i, c0 + 1 + (i + 1) % LAKE_SEG, l ? ((i & 1) ? 0x3C6C9C : 0x4474A4) : 0x8C7E5A, ctr);
+        m_lake[l] = b_bake(1.f);
+    }
+    return m_gantry && m_lake[0] && m_lake[1];
 }
 
 /* ── The car ─────────────────────────────────────────────────────────────────
@@ -1736,6 +1821,9 @@ static e3d_mesh *m_body, *m_wheel, *m_dust, *m_ghost;
 static uint8_t  s_far[HILLS], s_near[HILLS];
 static uint16_t s_col[W];                 /* hill index of each column, set before each frame */
 static uint16_t s_sky[H], s_grass[H], s_far_c[H], s_near_c[H];
+static uint8_t  s_cl_lo[HILLS], s_cl_hi[HILLS];   /* clouds: rows above the horizon each column covers (lo > hi = none) */
+static uint16_t s_cl_lit[H], s_cl_dark[H];
+static int      s_cl_min = 255, s_cl_max;
 static int      s_horizon;
 
 static void make_background(void)
@@ -1758,6 +1846,39 @@ static void make_background(void)
         s_far[i] = (uint8_t)clampf(f, 2.f, 40.f);
         s_near[i] = (uint8_t)clampf(n, 1.f, 12.f);
     }
+    /* clouds: flat-bottomed heaps round the sky, by heading like the hills */
+    for (int i = 0; i < HILLS; i++) {
+        s_cl_lo[i] = 255;
+        s_cl_hi[i] = 0;
+    }
+    for (int y = 0; y < H; y++) {
+        s_cl_lit[y] = rgb565(0xF6F8FA);
+        s_cl_dark[y] = rgb565(0xC4CEDA);
+    }
+    uint32_t r = 0x5EEDu;
+#define CRND() ((r = r * 1664525u + 1013904223u), (float)(r >> 8) * (1.f / 16777216.f))
+    int pos = 10;
+    while (pos < HILLS - 40) {
+        int w = 14 + (int)(CRND() * 34.f);           /* half width, in columns of HILLS */
+        if (pos + 2 * w >= HILLS)
+            break;
+        int base = 44 + (int)(CRND() * 40.f), th = 5 + w / 4 + (int)(CRND() * 5.f);
+        float ph = CRND() * 6.f;
+        for (int d = -w; d <= w; d++) {
+            float u = (float)d / (float)w, p = sqrtf(fmaxf(0, 1.f - u * u));
+            float bump = 0.65f + 0.35f * fabsf(sinf((float)d * 0.22f + ph)) * (0.6f + 0.4f * sinf((float)d * 0.07f + ph * 2.f));
+            int i = pos + w + d, hi = base + (int)((float)th * powf(p, 0.6f) * bump);
+            int lo = base + (int)((1.f - p) * 3.f);
+            if (hi > lo) {
+                s_cl_lo[i] = (uint8_t)lo;
+                s_cl_hi[i] = (uint8_t)hi;
+                if (lo < s_cl_min) s_cl_min = lo;
+                if (hi > s_cl_max) s_cl_max = hi;
+            }
+        }
+        pos += 2 * w + 10 + (int)(CRND() * 90.f);
+    }
+#undef CRND
 }
 
 static void bg_columns(float heading_deg)
@@ -1782,8 +1903,16 @@ static void sky_row(uint16_t *row, int y, int w, void *ctx)
     int up = s_horizon - y;
     uint16_t sky = s_sky[y];
     if (up > 40) {
-        for (int x = 0; x < w; x++)
-            row[x] = sky;
+        if (up < s_cl_min || up > s_cl_max) {
+            for (int x = 0; x < w; x++)
+                row[x] = sky;
+            return;
+        }
+        uint16_t lit = s_cl_lit[y], dark = s_cl_dark[y];
+        for (int x = 0; x < w; x++) {
+            int i = s_col[x];
+            row[x] = up < s_cl_lo[i] || up > s_cl_hi[i] ? sky : up - s_cl_lo[i] < 3 ? dark : lit;
+        }
         return;
     }
     uint16_t fc = s_far_c[y], nc = s_near_c[y];
@@ -1812,6 +1941,8 @@ static void draw_scene(e3d_t *e)
     float cx = cam->pos[0], cz = cam->pos[2];
     e3d_mat id;
     e3d_identity(&id);
+    draw_obj(e, m_lake[0], &id, -1, E3D_FLOOR);
+    draw_obj(e, m_lake[1], &id, -1, E3D_FLOOR);
     for (int i = 0; i < g_nchunks; i++) {
         const chunk_t *k = &g_chunk[i];
         float dx = k->cx - cx, dz = k->cz - cz;
@@ -2191,6 +2322,8 @@ static void free_meshes(void)
             e3d_mesh_free(g_chunk[i].scen[l]);
         }
     e3d_mesh_free(m_gantry);
+    e3d_mesh_free(m_lake[0]);
+    e3d_mesh_free(m_lake[1]);
     e3d_mesh_free(m_body);
     e3d_mesh_free(m_ghost);
     e3d_mesh_free(m_wheel);
