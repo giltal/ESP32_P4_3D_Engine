@@ -1039,7 +1039,8 @@ static void car_place(car_t *c, int k, float back)
 enum { ST_TITLE, ST_COUNT, ST_RACE, ST_FINISH };
 static int   g_state;
 static float g_state_t, g_t;
-static int   g_laps = 3;
+#define RACE_LAPS 3                        /* race records count only for this length (laps N = testing) */
+static int   g_laps = RACE_LAPS;
 static int   g_lap;                       /* 0-based, the lap being driven */
 static uint8_t g_cp;                      /* checkpoints passed this lap: bits 0..2 */
 static float g_race_t, g_lap_t;           /* timers */
@@ -1089,6 +1090,81 @@ static void records_io(bool save)
     }
 }
 
+/* ── The ghost: the best lap, driven again in wireframe ──────────────────────
+ * The car's place is recorded every GHOST_DT of the lap; a lap that beats the
+ * ghost becomes the ghost (on the card when it is a record). Also the times at
+ * the three checkpoints, for the splits. */
+#define GHOST_DT   0.1f
+#define GHOST_MAX  3000                   /* 300 s */
+#define GHOST_PATH DATA_DIR "/ghost.bin"
+typedef struct { int16_t x, z, h; } gpose_t;
+static gpose_t g_rec[GHOST_MAX], g_ghost[GHOST_MAX];
+static int     g_nrec, g_nghost;
+static bool    g_rec_ok;                  /* this lap was recorded from its start */
+static float   g_ghost_t;                 /* the ghost's lap time, 0 = none */
+static float   g_cp_now[3], g_cp_ghost[3];
+static float   g_delta, g_delta_t;        /* split against the ghost, shown while g_delta_t > 0 */
+static bool    g_ghost_on = true;
+
+static void ghost_io(bool save)
+{
+    if (save) {
+        mkdir("/sd/data", 0777);
+        mkdir(DATA_DIR, 0777);
+        FILE *f = fopen(GHOST_PATH, "wb");
+        if (!f)
+            return;
+        int32_t hd[6] = { 0x31474C44, (int32_t)(g_ghost_t * 1000.f), (int32_t)(g_cp_ghost[0] * 1000.f),
+                          (int32_t)(g_cp_ghost[1] * 1000.f), (int32_t)(g_cp_ghost[2] * 1000.f), g_nghost };
+        fwrite(hd, sizeof(hd), 1, f);
+        fwrite(g_ghost, sizeof(gpose_t), (size_t)g_nghost, f);
+        fclose(f);
+    } else {
+        FILE *f = fopen(GHOST_PATH, "rb");
+        if (!f)
+            return;
+        int32_t hd[6];
+        if (fread(hd, sizeof(hd), 1, f) == 1 && hd[0] == 0x31474C44 && hd[1] > 0 && hd[5] > 0 && hd[5] <= GHOST_MAX &&
+            fread(g_ghost, sizeof(gpose_t), (size_t)hd[5], f) == (size_t)hd[5]) {
+            g_ghost_t = (float)hd[1] / 1000.f;
+            for (int i = 0; i < 3; i++)
+                g_cp_ghost[i] = (float)hd[2 + i] / 1000.f;
+            g_nghost = hd[5];
+        }
+        fclose(f);
+    }
+}
+
+static void ghost_record(float lap_t)
+{
+    int n = (int)(lap_t / GHOST_DT) + 1;
+    while (g_nrec < n && g_nrec < GHOST_MAX) {
+        g_rec[g_nrec].x = (int16_t)clampf(g_car.x * 16.f, -32767, 32767);
+        g_rec[g_nrec].z = (int16_t)clampf(g_car.z * 16.f, -32767, 32767);
+        g_rec[g_nrec].h = (int16_t)(g_car.h * 10000.f);
+        g_nrec++;
+    }
+}
+
+/* the ghost's place at lap time t; false when it has none */
+static bool ghost_pose(float t, float *x, float *z, float *h)
+{
+    if (g_nghost < 2 || t < 0)
+        return false;
+    float f = t / GHOST_DT;
+    int i = (int)f;
+    if (i >= g_nghost - 1)
+        return false;
+    f -= (float)i;
+    const gpose_t *a = &g_ghost[i], *b = &g_ghost[i + 1];
+    *x = ((float)a->x + ((float)b->x - (float)a->x) * f) / 16.f;
+    *z = ((float)a->z + ((float)b->z - (float)a->z) * f) / 16.f;
+    float ha = (float)a->h / 10000.f, hb = (float)b->h / 10000.f;
+    float dh = fmodf(hb - ha + 3.f * (float)M_PI, 2.f * (float)M_PI) - (float)M_PI;
+    *h = ha + dh * f;
+    return true;
+}
+
 static void fmt_time(char *out, size_t n, float t)
 {
     if (t <= 0) {
@@ -1109,6 +1185,9 @@ static void race_reset(void)
     g_new_lap_rec = g_new_race_rec = false;
     g_wrong_t = g_off_t = g_stuck_t = 0;
     g_split_t = 0;
+    g_nrec = 0;
+    g_rec_ok = true;
+    g_delta_t = 0;
     g_cam_h = g_car.h;
     g_cam_x = g_car.x;
     g_cam_z = g_car.z;
@@ -1196,6 +1275,7 @@ static bool load_race(void)
     g_race_t = (float)rt / 1000.f;
     g_lap_t = (float)lt / 1000.f;
     memcpy(g_lap_times, times, sizeof(times));
+    g_rec_ok = false;                    /* this lap's start was not recorded: no ghost from it */
     car_t *c = &g_car;
     c->x = (float)x / 100.f;
     c->z = (float)z / 100.f;
@@ -1245,13 +1325,28 @@ static void finish_lap(void)
         g_new_lap_rec = true;
     }
     papp_log("dustline: lap %d %.2f s%s\n", g_lap + 1, (double)lt, rec ? " (best)" : "");
+    if (g_ghost_t > 0) {
+        g_delta = lt - g_ghost_t;
+        g_delta_t = 3.f;
+    }
+    /* a lap faster than the ghost becomes the ghost; on the card when it is a record */
+    if (g_rec_ok && g_nrec > 10 && (g_ghost_t <= 0 || lt < g_ghost_t)) {
+        memcpy(g_ghost, g_rec, sizeof(gpose_t) * (size_t)g_nrec);
+        g_nghost = g_nrec;
+        g_ghost_t = lt;
+        memcpy(g_cp_ghost, g_cp_now, sizeof(g_cp_ghost));
+        if (rec)
+            ghost_io(true);
+    }
+    g_nrec = 0;
+    g_rec_ok = true;
     g_lap++;
     g_lap_t = 0;
     g_cp = 0;
     if (g_lap >= g_laps) {
         g_state = ST_FINISH;
         g_state_t = 0;
-        bool rrec = (!g_auto || g_auto_rec) && (g_best_race <= 0 || g_race_t < g_best_race);
+        bool rrec = (!g_auto || g_auto_rec) && g_laps == RACE_LAPS && (g_best_race <= 0 || g_race_t < g_best_race);
         if (rrec) {
             g_best_race = g_race_t;
             g_new_race_rec = true;
@@ -1277,8 +1372,14 @@ static void track_progress(int prev, int now)
     int q = g_ns / 4;
     for (int i = 1; i <= 3; i++) {
         int m = q * i;
-        if (prev < m && now >= m && now - prev < 40)
+        if (prev < m && now >= m && now - prev < 40 && !(g_cp & (1u << (i - 1)))) {
             g_cp |= (uint8_t)(1u << (i - 1));
+            g_cp_now[i - 1] = g_lap_t;
+            if (g_ghost_t > 0 && g_cp_ghost[i - 1] > 0 && g_state == ST_RACE) {
+                g_delta = g_lap_t - g_cp_ghost[i - 1];
+                g_delta_t = 2.5f;
+            }
+        }
     }
     /* over the line: from the last stretch to the first */
     if (prev > g_ns - 40 && now < 40) {
@@ -1467,6 +1568,10 @@ static void update(const actions_t *act, float dt)
     drive_t in = act->d;
     if (g_state == ST_TITLE || g_auto)
         auto_drive(&in);
+    if (g_auto && g_state == ST_RACE && act->d.brake > 0) {   /* testing: B slows the computer down */
+        in.gas = 0;
+        in.brake = act->d.brake;
+    }
     if (g_state == ST_COUNT) {
         in.gas = in.brake = 0;
         in.hand = true;
@@ -1511,6 +1616,10 @@ static void update(const actions_t *act, float dt)
     c->idx = nearest_sample(c->x, c->z, c->idx, 6);
     if (g_state != ST_COUNT)
         track_progress(prev, c->idx);
+    if (g_state == ST_RACE)
+        ghost_record(g_lap_t);
+    if (g_delta_t > 0)
+        g_delta_t -= dt;
     if (hit > 3.f && g_hit_t <= 0) {
         g_hit_t = 0.25f;
         g_shake = fminf(6.f, hit * 0.3f);
@@ -1620,7 +1729,7 @@ static void update(const actions_t *act, float dt)
 #define CAM_UP    2.9f
 #define CAM_PITCH (-8.f)
 
-static e3d_mesh *m_body, *m_wheel, *m_dust, *m_shadow_dummy;
+static e3d_mesh *m_body, *m_wheel, *m_dust, *m_ghost;
 
 /* the background: sky, hills on the horizon (by heading), grass below */
 #define HILLS 1024
@@ -1734,6 +1843,16 @@ static void draw_scene(e3d_t *e)
         e3d_rotate(&r, 0, 0, -c->spin);
         e3d_mul(&w, &r);
         draw_obj(e, m_wheel, &w, -1, E3D_NO_SHADOW);
+    }
+    /* the ghost: the best lap, as a wire outline */
+    float gx, gz, gh;
+    if (g_ghost_on && !g_icon && (g_state == ST_RACE || g_state == ST_COUNT) &&
+        ghost_pose(g_state == ST_RACE ? g_lap_t : 0, &gx, &gz, &gh)) {
+        float dx = gx - cx, dz = gz - cz;
+        if (dx * dx + dz * dz < 200.f * 200.f && dx * ch + dz * sh > 0) {
+            e3d_mat g = mat_at(gx, 0.f, gz, 0, gh * DEG, 0, 1.f);
+            draw_obj(e, m_ghost, &g, 0x60E8FF, E3D_WIRE | E3D_DOUBLE_SIDED | E3D_UNLIT | E3D_NO_SHADOW);
+        }
     }
     /* scenery (no shadows: the car's are enough) */
     for (int i = 0; i < g_nchunks; i++) {
@@ -1942,6 +2061,14 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         if (g_lap == g_laps - 1)
             text_c(px, 78, "FINAL LAP", 0xFFE0, 2);
     }
+    if (g_delta_t > 0 && (g_state == ST_RACE || g_state == ST_FINISH)) {
+        /* against the ghost: green ahead, red behind */
+        float d = g_delta;
+        int cs = (int)(fabsf(d) * 100.f + 0.5f);
+        snprintf(line, sizeof(line), "%c%d.%02d", d < 0 ? '-' : '+', cs / 100, cs % 100);
+        shade_box(px, 0, 40, 74, 60, 5);
+        text_at(px, 4, 43, line, d < 0 ? 0x07E0 : 0xF9A6, 2);
+    }
     if (g_wrong_t > 1.f && ((int)(g_t * 3.f) & 1))
         text_c(px, 96, "WRONG WAY", 0xF800, 3);
     if (g_state == ST_FINISH) {
@@ -2042,8 +2169,18 @@ static bool make_meshes(void)
                     b_tri(v0 + a, v0 + b, v0 + d, 0xFFFFFF, c);
     }
     m_dust = b_bake(1.f);
-    (void)m_shadow_dummy;
-    return m_body && m_wheel && m_dust;
+    /* the ghost: the two body prisms only (wireframe costs by the edge) */
+    b_reset();
+    {
+        static const float low[][2] = { { 2.05f, 0.30f }, { 2.12f, 0.62f }, { 1.30f, 0.86f }, { -1.85f, 0.92f },
+                                        { -2.02f, 0.66f }, { -1.95f, 0.30f } };
+        static const float cab[][2] = { { 1.30f, 0.86f }, { 0.35f, 1.36f }, { -1.25f, 1.38f }, { -1.85f, 0.92f } };
+        uint32_t c6[6] = { 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF };
+        b_prism(low, 6, -0.86f, 0.86f, c6, 0xFFFFFF);
+        b_prism(cab, 4, -0.74f, 0.74f, c6, 0xFFFFFF);
+    }
+    m_ghost = b_bake(1.f);
+    return m_body && m_wheel && m_dust && m_ghost;
 }
 
 static void free_meshes(void)
@@ -2055,6 +2192,7 @@ static void free_meshes(void)
         }
     e3d_mesh_free(m_gantry);
     e3d_mesh_free(m_body);
+    e3d_mesh_free(m_ghost);
     e3d_mesh_free(m_wheel);
     e3d_mesh_free(m_dust);
     papp_free(g_gstart);
@@ -2094,10 +2232,14 @@ static int menu(const char *title, const char *const *items, int n)
 /* returns false to exit */
 static bool pause_menu(void)
 {
-    enum { M_RESUME, M_CENTRE, M_SAVE, M_LOAD, M_SAVE_EXIT, M_RESTART, M_EXIT };
-    static const char *const items[] = { "Resume", "Centre steering", "Save race", "Load race", "Save and exit", "Restart race",
-                                         "Exit" };
-    int r = menu("Dustline", items, 7);
+    enum { M_RESUME, M_CENTRE, M_GHOST, M_SAVE, M_LOAD, M_SAVE_EXIT, M_RESTART, M_EXIT };
+    const char *const items[] = { "Resume", "Centre steering", g_ghost_on ? "Ghost: on" : "Ghost: off", "Save race", "Load race",
+                                  "Save and exit", "Restart race", "Exit" };
+    int r = menu("Dustline", items, 8);
+    if (r == M_GHOST) {
+        g_ghost_on = !g_ghost_on;
+        note(g_ghost_on ? "GHOST ON" : "GHOST OFF");
+    } else
     if (r == M_CENTRE) {
         steer_centre();
         note(s_pot_f >= 0 ? "STEERING CENTRED" : "NO ROLLER");
@@ -2203,6 +2345,7 @@ int main(int argc, char **argv)
     }
 
     records_io(false);
+    ghost_io(false);
     save_peek();
     race_reset();
     g_state = ST_TITLE;

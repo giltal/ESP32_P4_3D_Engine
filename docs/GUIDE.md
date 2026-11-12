@@ -525,7 +525,7 @@ Pass `NULL` to either call to go back to the clear colour.
   glow at the light's position.
 - **Overlay text:** `e3d_text(px, stride, w, h, x, y, "TEXT", rgb565, scale)` after
   `e3d_end`.
-  - It draws 5x7 characters: A-Z, 0-9, and `. : - / %` and space. Lower case is drawn
+  - It draws 5x7 characters: A-Z, 0-9, and `. : - / % +` and space. Lower case is drawn
     as upper case.
   - It writes straight into the frame.
 

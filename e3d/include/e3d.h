@@ -183,7 +183,7 @@ typedef struct {
 } e3d_stats;
 const e3d_stats *e3d_get_stats(e3d_t *e);
 
-/* 5x7 text for overlays: A-Z 0-9 and . : - / % space. scale >= 1. */
+/* 5x7 text for overlays: A-Z 0-9 and . : - / % + space. scale >= 1. */
 void e3d_text(uint16_t *pixels, int stride, int w, int h, int x, int y, const char *s,
               uint16_t color, int scale);
 
