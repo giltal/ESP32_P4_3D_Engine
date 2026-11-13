@@ -328,10 +328,13 @@ static void draw_obj(e3d_t *e, const e3d_mesh *mesh, const e3d_mat *m, int32_t r
 /* ── The course ──────────────────────────────────────────────────────────────
  * Control points of a closed loop (metres; x, z), a surface for the stretch
  * that starts at each. Sampled with a Catmull-Rom spline, then every STEP m. */
-enum { SURF_TARMAC, SURF_DIRT, SURF_GRAVEL, SURF_VERGE, SURF_GRASS };
-static const char *const surf_name[] = { "TARMAC", "DIRT", "GRAVEL", "VERGE", "GRASS" };
-static const float surf_mu[]   = { 1.15f, 1.10f, 1.05f, 0.62f, 0.50f };   /* arcade grip: loose still turns at speed */
-static const float surf_drag[] = { 0.f, 30.f, 50.f, 220.f, 420.f };   /* rolling resistance, N per m/s */
+enum { SURF_TARMAC, SURF_DIRT, SURF_GRAVEL, SURF_VERGE, SURF_GRASS, SURF_SNOW, SURF_ICE, SURF_SAND, SURF_HARD };
+#define NSURF 9
+static const char *const surf_name[] = { "TARMAC", "DIRT", "GRAVEL", "VERGE", "GRASS", "SNOW", "ICE", "SAND", "HARDPAN" };
+/* arcade grip: the loose surfaces still turn at speed. GRASS is off the road (its name and colour
+   come from the stage: deep snow, soft sand) */
+static const float surf_mu[]   = { 1.15f, 1.10f, 1.05f, 0.62f, 0.50f, 1.00f, 0.86f, 1.00f, 1.10f };
+static const float surf_drag[] = { 0.f, 30.f, 50.f, 220.f, 420.f, 45.f, 10.f, 70.f, 15.f };   /* rolling resistance, N per m/s */
 
 typedef struct { float x, z; uint8_t surf; } ctrl_t;
 static const ctrl_t k_ctrl[] = {
@@ -360,7 +363,64 @@ static const ctrl_t k_ctrl[] = {
     { -110, -45, SURF_TARMAC },
     { -50, -18, SURF_TARMAC },
 };
-#define NCTRL ((int)(sizeof(k_ctrl) / sizeof(k_ctrl[0])))
+
+/* Frost Pass: snow, sweepers and an S, an icy stretch along a frozen lake */
+static const ctrl_t k_ctrl_snow[] = {
+    { 0, 0, SURF_SNOW }, { 110, 0, SURF_SNOW }, { 210, -25, SURF_SNOW }, { 290, -10, SURF_SNOW },
+    { 330, 40, SURF_SNOW }, { 310, 100, SURF_ICE }, { 250, 120, SURF_ICE }, { 200, 170, SURF_ICE },
+    { 220, 240, SURF_SNOW }, { 290, 270, SURF_SNOW }, { 350, 320, SURF_SNOW }, { 320, 390, SURF_SNOW },
+    { 240, 400, SURF_SNOW }, { 170, 360, SURF_SNOW }, { 100, 380, SURF_SNOW }, { 30, 420, SURF_SNOW },
+    { -60, 400, SURF_SNOW }, { -110, 330, SURF_SNOW }, { -90, 260, SURF_SNOW }, { -140, 200, SURF_SNOW },
+    { -200, 160, SURF_SNOW }, { -190, 90, SURF_SNOW }, { -130, 60, SURF_SNOW }, { -70, 20, SURF_SNOW },
+};
+/* Sun Mesa: a tarmac straight, a fast dry lake bed, then a twisty sandy section and a hairpin */
+static const ctrl_t k_ctrl_desert[] = {
+    { 0, 0, SURF_TARMAC }, { 150, 0, SURF_TARMAC }, { 300, 10, SURF_HARD }, { 420, 60, SURF_HARD },
+    { 470, 150, SURF_HARD }, { 430, 230, SURF_SAND }, { 350, 240, SURF_SAND }, { 300, 200, SURF_SAND },
+    { 240, 230, SURF_SAND }, { 220, 300, SURF_SAND }, { 150, 340, SURF_SAND }, { 60, 320, SURF_SAND },
+    { 20, 260, SURF_SAND }, { -50, 250, SURF_SAND }, { -130, 290, SURF_SAND }, { -210, 260, SURF_SAND },
+    { -240, 180, SURF_SAND }, { -200, 110, SURF_TARMAC }, { -230, 50, SURF_TARMAC }, { -180, -10, SURF_TARMAC },
+    { -90, -20, SURF_TARMAC },
+};
+#define NC(a) ((int)(sizeof(a) / sizeof(a[0])))
+#define NCTRL_MAX 24
+
+/* ── Stages ──────────────────────────────────────────────────────────────────
+ * The course, its look and its plants. Colours in pairs are (at the horizon, higher up) for the
+ * hills and (at the horizon, near the camera) for the ground. */
+enum { HILLS_ROLLING, HILLS_MOUNTAINS, HILLS_MESAS };
+enum { FLORA_FOREST, FLORA_SNOW, FLORA_DESERT };
+typedef struct {
+    const char *name, *file, *offroad;      /* file: "" = the first stage's file names */
+    const ctrl_t *ctrl;
+    int nctrl;
+    float lake_x, lake_z, lake_rx, lake_rz;
+    uint32_t water[2], shore;
+    uint32_t sky[2], ground[2], far[2], near[2];
+    uint32_t ev_ground[2], ev_far[2], ev_near[2];
+    uint32_t tarmac_verge, offroad_dust;
+    uint8_t hills, flora;
+    float trees, rocks;                     /* tree density, the share of rocks */
+} stage_t;
+static const stage_t k_stage[] = {
+    { "PINE VALLEY", "", "GRASS", k_ctrl, NC(k_ctrl), 280.f, 80.f, 45.f, 26.f, { 0x3C6C9C, 0x4474A4 }, 0x8C7E5A,
+      { 0x4C86D0, 0xCFE2EE }, { 0x8EA068, 0x4E7A2C }, { 0x8AA0B8, 0x6E86A2 }, { 0x3E5E3A, 0x2C4A2A },
+      { 0x7E8A4C, 0x40622A }, { 0x9A88A8, 0x7C6C90 }, { 0x4C5A3A, 0x3A4A30 },
+      0x7C8450, 0x7A8A50, HILLS_ROLLING, FLORA_FOREST, 1.f, 0.12f },
+    { "FROST PASS", "_snow", "DEEP SNOW", k_ctrl_snow, NC(k_ctrl_snow), 130.f, 150.f, 40.f, 26.f,
+      { 0xB4D0E6, 0xC0DAEE }, 0xDCE4EC,
+      { 0x5A8CD0, 0xDCE8F2 }, { 0xE0E8F0, 0xF2F5F9 }, { 0x8C9CB4, 0xF2F6FA }, { 0x34503E, 0x2A4434 },
+      { 0xE6C8B4, 0xCCBCC4 }, { 0xB898B0, 0xF0D8D0 }, { 0x3A4A44, 0x2E3E38 },
+      0xEEF2F6, 0xF0F4FA, HILLS_MOUNTAINS, FLORA_SNOW, 0.9f, 0.15f },
+    { "SUN MESA", "_desert", "SOFT SAND", k_ctrl_desert, NC(k_ctrl_desert), 90.f, 62.f, 32.f, 20.f,
+      { 0x3A7898, 0x4282A0 }, 0xB89C68,
+      { 0x3E7CD0, 0xE6DCC8 }, { 0xD8BC88, 0xCFAE76 }, { 0xC08060, 0xB06E52 }, { 0xDCB880, 0xD2AC74 },
+      { 0xD8A070, 0xB88A58 }, { 0xB86850, 0xA05A48 }, { 0xD89C68, 0xC88C5C },
+      0xD8BC88, 0xD8B880, HILLS_MESAS, FLORA_DESERT, 0.45f, 0.35f },
+};
+#define NSTAGES NC(k_stage)
+static int g_stage;
+static const stage_t *g_st = &k_stage[0];
 
 #define STEP       2.f
 #define MAX_SAMP   1800
@@ -394,12 +454,13 @@ static void build_track(void)
 {
     /* a dense polyline first, then resampled by arc length */
     enum { SUB = 64 };
-    static float px[NCTRL * SUB + 1], pz[NCTRL * SUB + 1];
-    static uint8_t ps[NCTRL * SUB + 1];
+    static float px[NCTRL_MAX * SUB + 1], pz[NCTRL_MAX * SUB + 1];
+    static uint8_t ps[NCTRL_MAX * SUB + 1];
+    const ctrl_t *kc = g_st->ctrl;
+    const int nc = g_st->nctrl < NCTRL_MAX ? g_st->nctrl : NCTRL_MAX;
     int n = 0;
-    for (int i = 0; i < NCTRL; i++) {
-        const ctrl_t *p0 = &k_ctrl[(i + NCTRL - 1) % NCTRL], *p1 = &k_ctrl[i], *p2 = &k_ctrl[(i + 1) % NCTRL],
-                     *p3 = &k_ctrl[(i + 2) % NCTRL];
+    for (int i = 0; i < nc; i++) {
+        const ctrl_t *p0 = &kc[(i + nc - 1) % nc], *p1 = &kc[i], *p2 = &kc[(i + 1) % nc], *p3 = &kc[(i + 2) % nc];
         for (int s = 0; s < SUB; s++) {
             catmull(p0, p1, p2, p3, (float)s / SUB, &px[n], &pz[n]);
             ps[n] = p1->surf;
@@ -538,10 +599,10 @@ static void add_prop(float x, float z, int kind, float s, float r)
 }
 
 /* the lake inside the loop: an ellipse with a wavy shore (radius scale by angle) */
-#define LAKE_X  280.f
-#define LAKE_Z  80.f
-#define LAKE_RX 45.f
-#define LAKE_RZ 26.f
+#define LAKE_X  (g_st->lake_x)
+#define LAKE_Z  (g_st->lake_z)
+#define LAKE_RX (g_st->lake_rx)
+#define LAKE_RZ (g_st->lake_rz)
 static float lake_shore(float a)
 {
     return 1.f + 0.10f * sinf(a * 3.f + 0.7f) + 0.06f * sinf(a * 7.f + 2.1f);
@@ -605,7 +666,7 @@ static void place_props(void)
         /* trees in clumps, more of them further from the road */
         if (k % 3 == 0)
             for (int side = -1; side <= 1; side += 2) {
-                float dens = t->surf == SURF_TARMAC ? 0.45f : 0.75f;
+                float dens = (t->surf == SURF_TARMAC ? 0.45f : 0.75f) * g_st->trees;
                 if (rnd() > dens)
                     continue;
                 float off = t->hw + VERGE_W + 3.f + rnd() * rnd() * 34.f;
@@ -614,7 +675,7 @@ static void place_props(void)
                 if (road_gap(x, z) < VERGE_W + 2.5f || lake_dist(x, z, 1.5f) < 1.f)
                     continue;
                 float u = rnd();
-                if (u < 0.12f)
+                if (u < g_st->rocks)
                     add_prop(x, z, OBJ_ROCK, 0.8f + rnd() * 1.4f, 1.4f);
                 else
                     add_prop(x, z, u < 0.32f ? OBJ_BIRCH : OBJ_PINE, 0.8f + rnd() * 0.6f, 0.7f);
@@ -719,8 +780,11 @@ static chunk_t g_chunk[MAX_CHUNKS];
 static int     g_nchunks;
 static e3d_mesh *m_gantry, *m_lake[2];        /* the lake: [0] its muddy shore, [1] the water */
 
-static const uint32_t road_rgb[3][2] = { { 0x56565C, 0x5E5E63 }, { 0xA27A50, 0x9A744C }, { 0x9E968A, 0x958E82 } };
-static const uint32_t verge_rgb[3]   = { 0x7C8450, 0x7E6A44, 0x857C68 };
+static const uint32_t road_rgb[NSURF][2] = { { 0x56565C, 0x5E5E63 }, { 0xA27A50, 0x9A744C }, { 0x9E968A, 0x958E82 },
+                                             { 0, 0 }, { 0, 0 }, { 0xB4BCC8, 0xACB4C2 }, { 0x98BCD8, 0x90B4D2 },
+                                             { 0xC49A62, 0xBC925C }, { 0xE2D6C0, 0xDACEB8 } };
+static const uint32_t verge_rgb[NSURF]   = { 0x7C8450, 0x7E6A44, 0x857C68, 0, 0, 0xEEF2F6, 0xE6ECF2, 0xE0C28C, 0xD8C4A0 };
+#define VERGE_RGB(s) ((s) == SURF_TARMAC ? g_st->tarmac_verge : verge_rgb[s])
 
 /* The road from sample k0 to k1 as rows of shared vertices across it: the verges, the road
  * (split by a centre line on tarmac or two wheel ruts on the loose stuff). Faces up. */
@@ -748,8 +812,13 @@ static int road_row(const samp_t *t, int stride, float *off)
 static void road_strip(int k0, int k1, int stride)
 {
     float off[ROW_MAX];
-    int prev = -1, pn = 0;
-    for (int k = k0; k <= k1; k += stride) {
+    int prev = -1, pn = 0, kprev = k0;
+    /* every stride samples, and always the last one (a short last chunk still gets a strip) */
+    for (int k = k0, end = 0; !end; kprev = k, k += stride) {
+        if (k >= k1) {
+            k = k1;
+            end = 1;
+        }
         int ka = k % g_ns;
         const samp_t *a = &g_tr[ka];
         float rx, rz;
@@ -760,7 +829,7 @@ static void road_strip(int k0, int k1, int stride)
             b_v(a->x + rx * off[i], 0, a->z + rz * off[i]);
         if (prev >= 0 && n != pn) {
             /* the surface changes here: a row of this layout at the last sample's place */
-            const samp_t *p = &g_tr[(k - stride) % g_ns];
+            const samp_t *p = &g_tr[kprev % g_ns];
             float px, pz;
             samp_right(p, &px, &pz);
             prev = B.nv;
@@ -768,14 +837,14 @@ static void road_strip(int k0, int k1, int stride)
                 b_v(p->x + px * off[i], 0, p->z + pz * off[i]);
         }
         if (prev >= 0) {
-            const samp_t *p = &g_tr[(k - stride) % g_ns];
-            int s = p->surf, kp = (k - stride) % g_ns;
+            const samp_t *p = &g_tr[kprev % g_ns];
+            int s = p->surf, kp = kprev % g_ns;
             uint32_t rc = road_rgb[s][(kp / 4) & 1];
             bool kerb = s == SURF_TARMAC && fabsf(p->curv) > 1.f / 70.f;
             for (int i = 0; i + 1 < n; i++) {
                 uint32_t c = rc;
                 if (i == 0 || i == n - 2)
-                    c = kerb ? ((kp & 1) ? 0xD02818 : 0xE8E8E0) : stride == 1 ? shade_rgb(verge_rgb[s], ((kp / 2) & 1) ? 1.f : 0.93f) : verge_rgb[s];
+                    c = kerb ? ((kp & 1) ? 0xD02818 : 0xE8E8E0) : stride == 1 ? shade_rgb(VERGE_RGB(s), ((kp / 2) & 1) ? 1.f : 0.93f) : VERGE_RGB(s);
                 else if (stride == 1 && s == SURF_TARMAC && i == 2)
                     c = ((kp / 3) & 1) == 0 ? 0xD8D8D0 : rc;
                 else if (stride == 1 && s != SURF_TARMAC && (i == 2 || i == 4))
@@ -793,29 +862,46 @@ static void road_strip(int k0, int k1, int stride)
 static void b_tree(const prop_t *p, bool far)
 {
     float s = p->s;
-    if (p->kind == OBJ_PINE) {
+    int fl = g_st->flora;
+    if (p->kind == OBJ_PINE && fl == FLORA_DESERT) {
+        /* a cactus: a column and two arms */
+        float x = p->x, z = p->z, w = 0.32f * s, ca = cosf(p->rot), sa = sinf(p->rot);
+        b_cone(x, 0, z, w * 1.1f, 4.4f * s, far ? 4 : 6, 0x4E7A3A, p->rot);
+        if (!far) {
+            float ax = x + ca * 0.75f * s, az = z + sa * 0.75f * s, bx = x - ca * 0.65f * s, bz = z - sa * 0.65f * s;
+            b_box(fminf(x, ax) - 0.2f * s, 1.5f * s, fminf(z, az) - 0.2f * s, fmaxf(x, ax) + 0.2f * s, 1.85f * s,
+                  fmaxf(z, az) + 0.2f * s, 0x48723A);
+            b_box(ax - 0.22f * s, 1.5f * s, az - 0.22f * s, ax + 0.22f * s, 3.0f * s, az + 0.22f * s, 0x48723A);
+            b_box(fminf(x, bx) - 0.18f * s, 2.2f * s, fminf(z, bz) - 0.18f * s, fmaxf(x, bx) + 0.18f * s, 2.5f * s,
+                  fmaxf(z, bz) + 0.18f * s, 0x527E40);
+            b_box(bx - 0.2f * s, 2.2f * s, bz - 0.2f * s, bx + 0.2f * s, 3.4f * s, bz + 0.2f * s, 0x527E40);
+        }
+    } else if (p->kind == OBJ_PINE) {
+        bool sn = fl == FLORA_SNOW;
         if (!far)
             b_cone(p->x, 0, p->z, 0.35f * s, 2.0f * s, 4, 0x5A4030, p->rot);
-        b_cone(p->x, 1.2f * s, p->z, 2.4f * s, 5.0f * s, far ? 4 : 6, 0x2E5A2A, p->rot);
+        b_cone(p->x, 1.2f * s, p->z, 2.4f * s, 5.0f * s, far ? 4 : 6, sn ? 0x2C4E38 : 0x2E5A2A, p->rot);
         if (!far)
-            b_cone(p->x, 3.6f * s, p->z, 1.6f * s, 3.6f * s, 5, 0x3A6E32, p->rot + 0.4f);
+            b_cone(p->x, 3.6f * s, p->z, 1.6f * s, 3.6f * s, 5, sn ? 0xEEF2F6 : 0x3A6E32, p->rot + 0.4f);
     } else if (p->kind == OBJ_BIRCH) {
         if (!far)
-            b_cone(p->x, 0, p->z, 0.25f * s, 4.0f * s, 4, 0xE0DCD0, p->rot);
-        /* the crown: an octahedron */
+            b_cone(p->x, 0, p->z, 0.25f * s, 4.0f * s, 4, fl == FLORA_FOREST ? 0xE0DCD0 : 0x6A5038, p->rot);
+        /* the crown: an octahedron (snow: frosted; desert: a flat acacia crown) */
         float cy = 4.6f * s, r = 2.0f * s;
+        static const uint32_t crown[3][2] = { { 0x7AA040, 0x6A9238 }, { 0xDCE4EC, 0xC4D0DC }, { 0x7E8444, 0x6C7238 } };
+        float up = fl == FLORA_DESERT ? 0.45f : 1.3f, down = fl == FLORA_DESERT ? 0.3f : 0.9f;
         int v0 = B.nv;
         b_v(p->x + r, cy, p->z);
         b_v(p->x - r, cy, p->z);
-        b_v(p->x, cy + r * 1.3f, p->z);
-        b_v(p->x, cy - r * 0.9f, p->z);
+        b_v(p->x, cy + r * up, p->z);
+        b_v(p->x, cy - r * down, p->z);
         b_v(p->x, cy, p->z + r);
         b_v(p->x, cy, p->z - r);
         float c[3] = { p->x, cy, p->z };
         for (int a = 0; a < 2; a++)
             for (int b = 2; b < 4; b++)
                 for (int d = 4; d < 6; d++)
-                    b_tri(v0 + a, v0 + b, v0 + d, (a + b + d) & 1 ? 0x7AA040 : 0x6A9238, c);
+                    b_tri(v0 + a, v0 + b, v0 + d, crown[fl][(a + b + d) & 1], c);
     } else if (p->kind == OBJ_ROCK) {
         float r = 1.1f * s;
         int v0 = B.nv;
@@ -829,7 +915,9 @@ static void b_tree(const prop_t *p, bool far)
         for (int a = 0; a < 2; a++)
             for (int b = 2; b < 4; b++)
                 for (int d = 4; d < 6; d++)
-                    b_tri(v0 + a, v0 + b, v0 + d, (a + d) & 1 ? 0x8C8A84 : 0x7A7872, c);
+                    b_tri(v0 + a, v0 + b, v0 + d, fl == FLORA_DESERT ? ((a + d) & 1 ? 0xB4744C : 0x9C6240)
+                                                  : fl == FLORA_SNOW ? ((a + d) & 1 ? 0x9AA0A8 : 0xE4EAF0)
+                                                  : ((a + d) & 1 ? 0x8C8A84 : 0x7A7872), c);
     } else if (p->kind == OBJ_BUSH && !far) {
         /* a low mound on the ground: four corners and a top, two greens */
         float r = 1.0f * p->s, cy = 0.02f, a = p->rot;
@@ -845,7 +933,9 @@ static void b_tree(const prop_t *p, bool far)
         for (int a2 = 0; a2 < 2; a2++)
             for (int b = 2; b < 3; b++)            /* the top half only: the bottom is under the ground */
                 for (int d = 4; d < 6; d++)
-                    b_tri(v0 + a2, v0 + b, v0 + d, (a2 + d) & 1 ? 0x46702E : 0x3C6428, c);
+                    b_tri(v0 + a2, v0 + b, v0 + d, fl == FLORA_SNOW ? ((a2 + d) & 1 ? 0xF2F5F8 : 0xDCE4EE)
+                                                   : fl == FLORA_DESERT ? ((a2 + d) & 1 ? 0x8C8048 : 0x7A6E3C)
+                                                   : ((a2 + d) & 1 ? 0x46702E : 0x3C6428), c);
     } else if (p->kind == OBJ_POST && !far) {
         b_box(p->x - 0.1f, 0, p->z - 0.1f, p->x + 0.1f, 1.0f, p->z + 0.1f, 0xF0F0F0);
         b_box(p->x - 0.11f, 0.7f, p->z - 0.11f, p->x + 0.11f, 0.9f, p->z + 0.11f, 0xE03020);
@@ -935,7 +1025,7 @@ static bool build_chunks(void)
         }
         float ctr[3] = { LAKE_X, -5.f, LAKE_Z };   /* below: the faces point up */
         for (int i = 0; i < LAKE_SEG; i++)
-            b_tri(c0, c0 + 1 + i, c0 + 1 + (i + 1) % LAKE_SEG, l ? ((i & 1) ? 0x3C6C9C : 0x4474A4) : 0x8C7E5A, ctr);
+            b_tri(c0, c0 + 1 + i, c0 + 1 + (i + 1) % LAKE_SEG, l ? g_st->water[i & 1] : g_st->shore, ctr);
         m_lake[l] = b_bake(1.f);
     }
     return m_gantry && m_lake[0] && m_lake[1];
@@ -1201,10 +1291,19 @@ static void note(const char *msg)
 }
 
 #define DATA_DIR    "/sd/data/dustline"
-#define REC_PATH    DATA_DIR "/records.txt"
-#define SAVE_PATH   DATA_DIR "/save.txt"
+/* each stage its own records, ghost and saved race; the first stage keeps the old names */
+static const char *stage_path(const char *base, const char *ext)
+{
+    static char buf[64];
+    snprintf(buf, sizeof(buf), DATA_DIR "/%s%s.%s", base, g_st->file, ext);
+    return buf;
+}
+#define REC_PATH    stage_path("records", "txt")
+#define SAVE_PATH   stage_path("save", "txt")
 #define SET_PATH    DATA_DIR "/settings.txt"
-static bool g_look_dirty, g_nofog, g_notes_on = true;     /* g_nofog: test switch (evening without the haze) */                 /* the evening switch changed: apply_look in the main loop */
+static bool g_look_dirty;                 /* the evening switch changed: apply_look in the main loop */
+static bool g_nofog;                      /* test switch: evening without the haze */
+static bool g_notes_on = true;
 
 static void settings_io(bool save)
 {
@@ -1213,15 +1312,19 @@ static void settings_io(bool save)
         mkdir(DATA_DIR, 0777);
         FILE *f = fopen(SET_PATH, "w");
         if (f) {
-            fprintf(f, "evening=%d\n", g_evening ? 1 : 0);
+            fprintf(f, "evening=%d\nstage=%d\n", g_evening ? 1 : 0, g_stage);
             fclose(f);
         }
     } else {
         FILE *f = fopen(SET_PATH, "r");
         if (f) {
             int v;
-            if (fscanf(f, "evening=%d", &v) == 1)
+            if (fscanf(f, "evening=%d ", &v) == 1)
                 g_evening = v != 0;
+            if (fscanf(f, "stage=%d", &v) == 1 && v >= 0 && v < NSTAGES) {
+                g_stage = v;
+                g_st = &k_stage[v];
+            }
             fclose(f);
         }
     }
@@ -1258,7 +1361,7 @@ static void records_io(bool save)
  * the three checkpoints, for the splits. */
 #define GHOST_DT   0.1f
 #define GHOST_MAX  3000                   /* 300 s */
-#define GHOST_PATH DATA_DIR "/ghost.bin"
+#define GHOST_PATH stage_path("ghost", "bin")
 typedef struct { int16_t x, z, h; } gpose_t;
 static gpose_t g_rec[GHOST_MAX], g_ghost[GHOST_MAX];
 static int     g_nrec, g_nghost;
@@ -1841,9 +1944,15 @@ static void update(const actions_t *act, float dt)
     } else if (c->surf == SURF_GRAVEL) {
         rate = speed * 0.8f + slide * 30.f;
         dc = 0xB0A898;
+    } else if (c->surf == SURF_SNOW || c->surf == SURF_ICE) {
+        rate = speed * (c->surf == SURF_SNOW ? 1.0f : 0.4f) + slide * 30.f;
+        dc = 0xF0F4FA;
+    } else if (c->surf == SURF_SAND || c->surf == SURF_HARD) {
+        rate = speed * (c->surf == SURF_SAND ? 1.0f : 0.7f) + slide * 30.f;
+        dc = c->surf == SURF_SAND ? 0xD8B880 : 0xC8B494;
     } else if (c->surf == SURF_GRASS) {
-        rate = speed * 0.3f;
-        dc = 0x7A8A50;
+        rate = speed * (g_st->flora == FLORA_FOREST ? 0.3f : 0.9f);
+        dc = g_st->offroad_dust;
     } else if (slide > 0.3f) {
         rate = slide * 25.f;
         dc = 0xD0D0D0;
@@ -1935,9 +2044,11 @@ static void make_palette(void)
     bool ev = g_evening;
     for (int y = 0; y < H; y++) {
         float t = clampf((float)y / (float)(s_horizon > 0 ? s_horizon : 1), 0, 1);
-        s_sky[y] = rgb565(ev ? mix_rgb(0x34488C, FOG_RGB, powf(t, 1.7f)) : mix_rgb(0x4C86D0, 0xCFE2EE, t * t));
+        const stage_t *st = g_st;
+        s_sky[y] = rgb565(ev ? mix_rgb(0x34488C, FOG_RGB, powf(t, 1.7f)) : mix_rgb(st->sky[0], st->sky[1], t * t));
         float g = clampf((float)(y - s_horizon) / (float)(H - s_horizon), 0, 1);
-        uint32_t grass = ev ? mix_rgb(0x7E8A4C, 0x40622A, sqrtf(g)) : mix_rgb(0x8EA068, 0x4E7A2C, sqrtf(g));
+        uint32_t grass = ev ? mix_rgb(st->ev_ground[0], st->ev_ground[1], sqrtf(g))
+                            : mix_rgb(st->ground[0], st->ground[1], sqrtf(g));
         if (ev && y >= s_horizon) {
             /* the ground this row shows, and the fog the engine would give it */
             float a = atanf(((float)y + 0.5f - H * 0.5f) / FOCAL) - CAM_PITCH * RAD;
@@ -1947,13 +2058,13 @@ static void make_palette(void)
         s_grass[y] = rgb565(grass);
         float hz = clampf((float)(s_horizon - y) / 40.f, 0, 1);
         if (ev) {
-            s_far_c[y] = rgb565(mix_rgb(mix_rgb(0x9A88A8, 0x7C6C90, hz), FOG_RGB, 0.5f));
-            s_near_c[y] = rgb565(mix_rgb(mix_rgb(0x4C5A3A, 0x3A4A30, hz), FOG_RGB, 0.32f));
+            s_far_c[y] = rgb565(mix_rgb(mix_rgb(st->ev_far[0], st->ev_far[1], hz), FOG_RGB, 0.5f));
+            s_near_c[y] = rgb565(mix_rgb(mix_rgb(st->ev_near[0], st->ev_near[1], hz), FOG_RGB, 0.32f));
             s_cl_lit[y] = rgb565(0xFFDCAE);
             s_cl_dark[y] = rgb565(0xC88E8C);
         } else {
-            s_far_c[y] = rgb565(mix_rgb(0x8AA0B8, 0x6E86A2, hz));
-            s_near_c[y] = rgb565(mix_rgb(0x3E5E3A, 0x2C4A2A, hz));
+            s_far_c[y] = rgb565(mix_rgb(st->far[0], st->far[1], hz));
+            s_near_c[y] = rgb565(mix_rgb(st->near[0], st->near[1], hz));
             s_cl_lit[y] = rgb565(0xF6F8FA);
             s_cl_dark[y] = rgb565(0xC4CEDA);
         }
@@ -1982,6 +2093,18 @@ static void make_background(void)
         float a = (float)i / HILLS * 6.2832f;
         float f = 16.f + 9.f * sinf(a * 3.f + 1.f) + 6.f * sinf(a * 7.f + 2.f) + 3.f * sinf(a * 17.f) + 4.f * sinf(a * 2.f);
         float n = 5.f + 3.f * sinf(a * 23.f + 0.5f) + 2.f * sinf(a * 41.f) + 1.5f * sinf(a * 97.f);
+        if (g_st->hills == HILLS_MOUNTAINS) {
+            /* peaks: sharp tops, a ridge of pines in front */
+            float pk = fabsf(sinf(a * 4.f + 1.f)), pk2 = fabsf(sinf(a * 9.f + 0.4f));
+            f = 8.f + 24.f * pk * pk * pk + 9.f * pk2 * pk2 + 2.f * sinf(a * 31.f);
+            n = 7.f + 3.f * sinf(a * 23.f + 0.5f) + 2.f * sinf(a * 41.f) + 2.f * fabsf(sinf(a * 97.f));
+        } else if (g_st->hills == HILLS_MESAS) {
+            /* flat-topped mesas far off, low dunes in front */
+            float m = sinf(a * 5.f + 0.3f) + 0.5f * sinf(a * 11.f + 1.f);
+            f = m > 0.75f ? 22.f + 2.f * sinf(a * 40.f) : m > 0.6f ? 4.f + (m - 0.6f) * 120.f : 3.f + 1.5f * sinf(a * 13.f);
+            float d = sinf(a * 6.f + 1.f);
+            n = 3.f + 4.f * d * d + 1.5f * sinf(a * 15.f);
+        }
         s_far[i] = (uint8_t)clampf(f, 2.f, 40.f);
         s_near[i] = (uint8_t)clampf(n, 1.f, 12.f);
     }
@@ -2259,8 +2382,8 @@ static void make_notes(void)
         t->len = n;
         t->dir = (int8_t)dir;
         t->grade = rmin < 25.f ? 1 : rmin < 40.f ? 2 : rmin < 60.f ? 3 : rmin < 90.f ? 4 : rmin < 130.f ? 5 : 6;
-        if (deg > 140.f && rmin < 35.f)
-            t->grade = 0;
+        if (deg > 140.f && rmin < 35.f && (float)n * STEP / (deg * RAD) < 30.f)
+            t->grade = 0;                      /* a hairpin: tight all the way round, not a long sweeper */
         t->lng = n * STEP > 70.f && deg > 60.f;
     }
     char line[200];
@@ -2276,7 +2399,7 @@ static int note_now(int *into)
 {
     const car_t *c = &g_car;
     float speed = hypotf(c->vx, c->vz);
-    float look = clampf(speed * 3.f, 70.f, 170.f) / STEP;   /* samples */
+    float look = clampf(speed * 4.5f, 100.f, 260.f) / STEP;   /* samples: about 4.5 s ahead */
     int best = -1, bd = 1 << 30;
     for (int j = 0; j < g_nnotes; j++) {
         int d = (g_note[j].start - c->idx + g_ns) % g_ns;
@@ -2346,9 +2469,25 @@ static void note_arrow(uint16_t *px, int x0, int y0, int sz, const note_t *n, ui
     tri_fill(px, ex + dx * hl, ey + dy * hl, ex - dy * hw, ey + dx * hw, ex + dy * hw, ey - dx * hw, col);
 }
 
+/* the co-driver's call when a sign shows: a glide up for right, down for left, then the grade
+   (lower = tighter; tight corners and hairpins twice) */
+static void note_beep(const note_t *n)
+{
+    float a = n->dir > 0 ? 700.f : 950.f, b = n->dir > 0 ? 950.f : 700.f;
+    sfx(a, b, 110, WAVE_TRI, 0.16f);
+    float g = n->grade == 0 ? 400.f : 480.f + 90.f * (float)n->grade;
+    sfx_at(g, g, 90, WAVE_TRI, 0.16f, 150);
+    if (n->grade <= 1)
+        sfx_at(g, g, 90, WAVE_TRI, 0.16f, 270);
+}
+
+static int s_note_shown = -1;
 static void draw_note(uint16_t *px)
 {
     int into, j = note_now(&into);
+    if (j != s_note_shown && j >= 0)
+        note_beep(&g_note[j]);
+    s_note_shown = j;
     if (j < 0)
         return;
     const note_t *n = &g_note[j];
@@ -2416,7 +2555,7 @@ static void make_map(void)
 
 static void draw_map(uint16_t *px, int x0, int y0)
 {
-    static const uint16_t col[3] = { 0xDEFB, 0xD5AE, 0xBDD7 };
+    static const uint16_t col[NSURF] = { 0xDEFB, 0xD5AE, 0xBDD7, 0, 0, 0xFFFF, 0x9E9F, 0xF6AE, 0xE5F2 };
     shade_box(px, x0 - 2, y0 - 2, x0 + MAP_W + 2, y0 + MAP_H + 2, 4);
     for (int y = 0; y < MAP_H; y++)
         for (int x = 0; x < MAP_W; x++)
@@ -2470,6 +2609,8 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         shade_box(px, 0, 40, W, 176, 4);
         text_c(px, 54, "DUSTLINE", 0xFFFF, 5);
         text_c(px, 96, "A RALLY STAGE AGAINST THE CLOCK", 0xFE60, 1);
+        snprintf(line, sizeof(line), "STAGE  %s", g_st->name);
+        text_c(px, 106, line, 0xFFFF, 1);
         if (((int)(g_t * 2.f)) & 1)
             text_c(px, 116, "PRESS A OR TAP TO RACE", 0xFFFF, 1);
         text_c(px, 134, "ROLLER STEERS   GAS SLIDER OR R2   A BRAKE   DOWN REVERSE", 0xA534, 1);
@@ -2508,7 +2649,8 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
     text_at(px, cx + 18, H - 31, "KM/H", 0xBDF7, 1);
     snprintf(line, sizeof(line), "%c", c->vf < -0.5f && act->d.rev > 0 ? 'R' : (char)('0' + c->gear));
     text_at(px, cx + 18, H - 21, line, 0xFE60, 2);
-    text_at(px, cx - 88, H - 31, surf_name[c->surf], c->surf == SURF_TARMAC ? 0xC618 : 0xFD20, 1);
+    text_at(px, cx - 88, H - 31, c->surf == SURF_GRASS ? g_st->offroad : surf_name[c->surf],
+            c->surf == SURF_TARMAC ? 0xC618 : 0xFD20, 1);
     /* steering bar */
     int bx = cx - 50, by = H - 8, bw = 100;
     fill(px, bx, by, bw, 3, 0x4208);
@@ -2688,22 +2830,14 @@ static bool make_meshes(void)
     return m_body && m_wheel && m_dust && m_ghost;
 }
 
+static void stage_free(void);
 static void free_meshes(void)
 {
-    for (int i = 0; i < g_nchunks; i++)
-        for (int l = 0; l < 2; l++) {
-            e3d_mesh_free(g_chunk[i].road[l]);
-            e3d_mesh_free(g_chunk[i].scen[l]);
-        }
-    e3d_mesh_free(m_gantry);
-    e3d_mesh_free(m_lake[0]);
-    e3d_mesh_free(m_lake[1]);
+    stage_free();
     e3d_mesh_free(m_body);
     e3d_mesh_free(m_ghost);
     e3d_mesh_free(m_wheel);
     e3d_mesh_free(m_dust);
-    papp_free(g_gstart);
-    papp_free(g_gidx);
 }
 
 /* ── Presenting: a thread scales one frame with the PPA while the next is drawn ── */
@@ -2762,23 +2896,116 @@ static bool pause_menu(void)
     return r != M_EXIT && !papp_exit_requested();
 }
 
+/* ── Building a stage ─────────────────────────────────────────────────────
+ * The course, its scenery meshes, background, notes and map; switching frees the old ones
+ * and builds the new stage in place (about 0.8 s). */
+static e3d_t *g_e;
+
+static bool stage_build(void)
+{
+    if (!b_init()) {
+        b_free();
+        return false;
+    }
+    build_track();
+    place_props();
+    bool grid = g_gstart && g_gidx, ok = grid && build_chunks();
+    b_free();
+    if (!ok) {
+        papp_log("dustline: stage %s: %s failed (grid %dx%d, %d props)\n", g_st->name,
+                 grid ? "meshes" : "props grid", g_gw, g_gh, g_nprops);
+        return false;
+    }
+    make_background();
+    make_notes();
+    make_map();
+    return true;
+}
+
+static void stage_free(void)
+{
+    for (int i = 0; i < g_nchunks; i++)
+        for (int l = 0; l < 2; l++) {
+            e3d_mesh_free(g_chunk[i].road[l]);
+            e3d_mesh_free(g_chunk[i].scen[l]);
+            g_chunk[i].road[l] = g_chunk[i].scen[l] = NULL;
+        }
+    g_nchunks = 0;
+    e3d_mesh_free(m_gantry);
+    e3d_mesh_free(m_lake[0]);
+    e3d_mesh_free(m_lake[1]);
+    m_gantry = m_lake[0] = m_lake[1] = NULL;
+    papp_free(g_gstart);
+    papp_free(g_gidx);
+    g_gstart = NULL;
+    g_gidx = NULL;
+}
+
+/* the records, ghost and saved race of the stage */
+static void stage_files(void)
+{
+    g_best_lap = g_best_race = 0;
+    g_nghost = 0;
+    g_ghost_t = 0;
+    records_io(false);
+    ghost_io(false);
+    save_peek();
+}
+
+static bool stage_switch(int st)
+{
+    int64_t t0 = papp_time_us();
+    stage_free();
+    g_stage = st;
+    g_st = &k_stage[st];
+    bool ok = stage_build();
+    if (g_e)
+        apply_look(g_e);
+    stage_files();
+    race_reset();
+    g_state = ST_TITLE;
+    g_state_t = 0;
+    papp_log("dustline: stage %s built in %d ms\n", g_st->name, (int)((papp_time_us() - t0) / 1000));
+    return ok;
+}
+
 static void start_menu(void)
 {
-    if (g_save_lap < 0) {
-        new_race();
-        return;
-    }
-    char cont[32];
+    char cont[32], stg[40];
     snprintf(cont, sizeof(cont), "Continue (lap %d)", g_save_lap + 1);
-    const char *const items[] = { cont, "New race" };
-    int r = menu("Dustline", items, 2);
-    if (r == 0) {
+    snprintf(stg, sizeof(stg), "Stage: %s", g_st->name);
+    const char *items[3];
+    int n = 0, i_cont = -1;
+    if (g_save_lap >= 0) {
+        i_cont = n;
+        items[n++] = cont;
+    }
+    int i_new = n;
+    items[n++] = g_save_lap >= 0 ? "New race" : "Start race";
+    int i_stage = n;
+    items[n++] = stg;
+    int r = menu("Dustline", items, n);
+    if (r == i_cont) {
         if (!load_race()) {
             note("SAVE DAMAGED");
             new_race();
         }
-    } else if (r == 1)
+    } else if (r == i_new)
         new_race();
+    else if (r == i_stage) {
+        const char *names[NSTAGES];
+        for (int i = 0; i < NSTAGES; i++)
+            names[i] = k_stage[i].name;
+        int c = menu("Stage", names, NSTAGES);
+        if (c >= 0 && c < NSTAGES && c != g_stage) {
+            if (!stage_switch(c)) {
+                note("OUT OF MEMORY");
+                if (c != 0)
+                    stage_switch(0);
+            }
+            settings_io(true);
+        }
+    }
 }
 
 int main(int argc, char **argv)
@@ -2791,13 +3018,21 @@ int main(int argc, char **argv)
             g_show_fps = true;
         else if (!strcmp(argv[i], "evening"))
             g_evening = true;
+        else if (!strcmp(argv[i], "day"))
+            g_evening = false;
         else if (!strcmp(argv[i], "nofog"))
             g_nofog = true;
         else if (!strcmp(argv[i], "rec"))
             g_auto_rec = true;
         else if (!strcmp(argv[i], "icon"))
             g_icon = true;
-        else if (!strcmp(argv[i], "laps") && i + 1 < argc)
+        else if (!strcmp(argv[i], "stage") && i + 1 < argc) {
+            int v = atoi(argv[++i]);
+            if (v >= 0 && v < NSTAGES) {
+                g_stage = v;
+                g_st = &k_stage[v];
+            }
+        } else if (!strcmp(argv[i], "laps") && i + 1 < argc)
             g_laps = (int)clampf((float)atoi(argv[++i]), 1, 9);
     }
     srand((unsigned)papp_time_us());
@@ -2815,21 +3050,17 @@ int main(int argc, char **argv)
                               ? papp_thread_create(presenter_main, NULL, &pcfg) : NULL;
     e3d_t *e = e3d_create(W, H, 2);
     int64_t t0 = papp_time_us();
+    g_e = e;
     bool ok = pres && e && b_init();
-    if (ok) {
-        build_track();
-        place_props();
-        ok = build_chunks() && make_meshes();
-    }
+    if (ok)
+        ok = make_meshes();
     b_free();
+    ok = ok && stage_build();
     if (!ok) {
         papp_log("dustline: out of memory\n");
         return 1;
     }
-    papp_log("dustline: built in %d ms, %d chunks\n", (int)((papp_time_us() - t0) / 1000), g_nchunks);
-    make_background();
-    make_notes();
-    make_map();
+    papp_log("dustline: %s built in %d ms, %d chunks\n", g_st->name, (int)((papp_time_us() - t0) / 1000), g_nchunks);
     e3d_set_focal(e, FOCAL);
     e3d_set_background_rows(e, sky_row, NULL);
     e3d_params *par = e3d_params_get(e);
@@ -2848,9 +3079,7 @@ int main(int argc, char **argv)
         g_snd = NULL;
     }
 
-    records_io(false);
-    ghost_io(false);
-    save_peek();
+    stage_files();
     race_reset();
     g_state = ST_TITLE;
     if (g_auto)

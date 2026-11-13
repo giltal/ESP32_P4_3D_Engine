@@ -374,10 +374,24 @@ once.
   <img src="docs/images/dustline_ghost.png" width="49%" alt="The ghost of the best lap ahead on the gravel, and the split time against it, +3.29 in red">
   <img src="docs/images/dustline_notes.png" width="49%" alt="A pace note sign at the top: an arrow bending right, 2 RIGHT, and INTO 2 left">
   <img src="docs/images/dustline_evening.png" width="49%" alt="Evening: a golden sky and haze, long shadows, the HAIRPIN R sign into a 1">
+  <img src="docs/images/dustline_snow.png" width="49%" alt="Frost Pass: a packed snow road through snow-capped pines, white mountain peaks, the icy stretch ahead">
+  <img src="docs/images/dustline_desert.png" width="49%" alt="Sun Mesa: a sandy road with ruts, cacti, flat-topped red mesas on the horizon">
 </p>
 
-`game/dustline` is a rally stage against the clock: one car on a closed course through the
-woods, three laps, seen from a chase camera.
+`game/dustline` is a rally stage against the clock: one car on a closed course, three laps, seen
+from a chase camera. Three stages, picked on the title (Stage: in its menu; remembered):
+
+| Stage | Length | Surfaces | Look |
+|---|---|---|---|
+| Pine Valley | 1.85 km | tarmac, dirt, gravel | woods, rolling hills, a lake |
+| Frost Pass | 1.89 km | packed snow, an icy stretch | snow-capped pines, white peaks, a frozen lake |
+| Sun Mesa | 1.92 km | tarmac, a dry lake bed (hardpan), sand | cacti, acacias, red rocks, mesas, an oasis |
+
+A stage is data (`k_stage[]` in main.c): control points, lake, colours, hill shape (rolling,
+mountains, mesas) and plants. Switching frees the course meshes and builds the new stage in
+place (about 0.8 s). Each stage has its own records, ghost and saved race (`records_snow.txt`,
+`ghost_desert.bin`, ...; Pine Valley keeps the old names). Off the road is GRASS, DEEP SNOW or
+SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
 
 - The course is 1.85 km: a Catmull-Rom loop through 24 control points, sampled every 2 m.
   Tarmac (dashed centre line, kerbs on the corners), then dirt with wheel ruts and a hairpin,
@@ -410,9 +424,12 @@ woods, three laps, seen from a chase camera.
   Save and exit in the pause menu (`/sd/data/dustline/save.txt`); Continue on the title loads it.
 - Pace notes: the corners are found from the course's curvature and graded like a co-driver's
   notes, 1 (tightest) to 6 (fast) by the smallest radius, HAIRPIN for a tight turn of more than
-  140 degrees, LONG for one that goes on. A sign at the top shows the next corner (an arrow bent
-  by its angle, the grade, yellow / orange / red) from about 3 s before it until you are into it,
-  with an INTO box when the next corner follows within 40 m. The course has 11 notes.
+  140 degrees that stays tight all the way round, LONG for one that goes on. A sign at the top
+  shows the next corner (an arrow bent by its angle, the grade, yellow / orange / red) from about
+  4.5 s before it (100-260 m) until you are into it, with an INTO box when the next corner follows
+  within 40 m. When a sign shows, a two-tone call: a glide up for right, down for left, then a
+  beep for the grade (lower is tighter; grade 1 and hairpins twice). Pine Valley has 11 notes,
+  Frost Pass and Sun Mesa 7 each.
 - Evening (pause menu, saved in `/sd/data/dustline/settings.txt`, or the `evening` argument): a
   low golden sun with long shadows, a golden sky and haze (the engine's fog) towards the horizon.
   The sky is painted, so the game fades it to the fog colour itself (`fog_keep_bg`).
@@ -420,8 +437,9 @@ woods, three laps, seen from a chase camera.
   0.1 s); at a quarter, half and three quarters of the lap the split against it shows under the
   times, red when behind. Pause menu: Ghost on/off.
 
-On the Guition 4.3", over an autopilot lap: 49 fps average, 42 in the worst second (geometry
-6.6 ms + rasterising 7.8 ms a frame). Evening: 42 fps, 37 in the worst second; the low sun costs
+On the Guition 4.3", over an autopilot lap: Pine Valley 49 fps average, 42 in the worst second
+(geometry 6.6 ms + rasterising 7.8 ms a frame); Frost Pass 49 / 44; Sun Mesa 52 / 46. Autopilot
+laps 81.3 s, 90.7 s, 85.6 s (the host sim gives the same within 0.1 s, `STAGE=1` / `STAGE=2`). Evening: 42 fps, 37 in the worst second; the low sun costs
 nothing, the fog about 3.5 ms a frame (it touches every pixel).
 
 ```bash
@@ -430,8 +448,8 @@ python game/dustline/build.py           # -> build/dustline/dustline.papp
 
 Pass `auto` to let the computer drive (its times do not count, unless `rec`; B slows it down, to
 see the ghost pull away), `laps N` (race records count for 3 laps only), or
-`fps` to show the frame rate, `evening` for the evening look (`nofog`: without the haze, to
-measure it). Each lap logs a `perf` line: average fps, the worst second, render times.
+`fps` to show the frame rate, `stage N` (0-2, not saved), `evening` / `day` for the look (`nofog`:
+evening without the haze, to measure it). Each lap logs a `perf` line: average fps, the worst second, render times.
 
 ---
 

@@ -23,11 +23,14 @@ for a in sys.argv[1:]:
     k, v = a.split("=")
     P[k] = float(v)
 
-SURF = {"SURF_TARMAC": 0, "SURF_DIRT": 1, "SURF_GRAVEL": 2}
+SURF = {"SURF_TARMAC": 0, "SURF_DIRT": 1, "SURF_GRAVEL": 2, "SURF_SNOW": 5, "SURF_ICE": 6, "SURF_SAND": 7, "SURF_HARD": 8}
+STAGE = int(P.get("STAGE", 0))   # 0 forest, 1 snow, 2 desert
+ARR = ["k_ctrl[] = {", "k_ctrl_snow[] = {", "k_ctrl_desert[] = {"][STAGE]
 ctrl = [(float(x), float(z), SURF[s]) for x, z, s in
-        re.findall(r"\{\s*([-0-9.]+),\s*([-0-9.]+),\s*(SURF_\w+)\s*\}", SRC.split("k_ctrl[] = {")[1].split("};")[0])]
-MU = [P.get("MT", 1.15), P.get("MD", 1.10), P.get("MG", 1.05), 0.62, 0.50]   # MT / MD / MG = tarmac / dirt / gravel grip
-DRAGS = [0, 30, 50, 220, 420]
+        re.findall(r"\{\s*([-0-9.]+),\s*([-0-9.]+),\s*(SURF_\w+)\s*\}", SRC.split(ARR)[1].split("};")[0])]
+# MT / MD / MG = tarmac / dirt / gravel grip; the rest as main.c's surf_mu / surf_drag
+MU = [P.get("MT", 1.15), P.get("MD", 1.10), P.get("MG", 1.05), 0.62, 0.50, 1.00, 0.86, 1.00, 1.10]
+DRAGS = [0, 30, 50, 220, 420, 45, 10, 70, 15]
 G = 9.81
 STEP = 2.0
 
