@@ -14,12 +14,12 @@
  *
  * Records: best lap and best race in /sd/data/dustline/records.txt.
  * Save: the pause menu's "Save race" keeps the race (lap, times, the car) in
- * /sd/data/dustline/save.txt; "Load race" and "Continue" on the title bring it
- * back, after a countdown.
+ * /sd/data/dustline/save.txt; "Continue" on the title brings it back, after a
+ * countdown.
  *
- * Controls: the board's roller (paddle) steers; it is centred where it is when
- * a race starts (pause menu: "Centre steering"). Pad LEFT/RIGHT or the stick
- * steer too. A = gas, B = brake / reverse, X = handbrake, Y = back on the road,
+ * Controls: the board's roller (paddle) steers, absolute: its middle is
+ * straight ahead, its ends full lock. Pad LEFT/RIGHT or the stick steer too
+ * (while pressed they win over the roller). A = gas, B = brake / reverse, X = handbrake, Y = back on the road,
  * START or SELECT = pause. Touch: arrows at the bottom left, GAS and BRAKE at
  * the bottom right, the top-right corner pauses.
  *
@@ -1280,13 +1280,10 @@ static void race_reset(void)
     g_cam_z = g_car.z;
 }
 
-static void steer_centre(void);
-
 static void start_count(void)
 {
     g_state = ST_COUNT;
     g_state_t = 0;
-    steer_centre();
 }
 
 static void new_race(void)
@@ -1483,10 +1480,9 @@ static int s_touch_n;
 static bool s_touch_used;
 static int s_pot_raw = -1;                /* filtered reading */
 static float s_pot_f = -1.f;
-static float s_pot_mid = -1.f;            /* reading at straight ahead */
-static bool s_pot_live;                   /* the roller has been turned */
-static float s_pot_ref;
-#define POT_RANGE 18000.f                 /* counts from the centre to full lock (of 0..65535) */
+/* the roller is absolute: 0..65535 maps straight to full left..full right */
+#define POT_MID   32768.f
+#define POT_RANGE 32768.f                 /* counts from the middle to full lock */
 static float s_pad_steer;                 /* pad left/right and the touch arrows, ramped */
 static float s_touch_dig;                 /* touch arrows held in the last frame: -1, 0, 1 */
 
@@ -1497,12 +1493,6 @@ static float steer_curve(float v)
 }
 static float g_steer_show;                /* what the steering does, for the HUD */
 static bool g_hand_held;
-
-static void steer_centre(void)
-{
-    if (s_pot_f >= 0)
-        s_pot_mid = s_pot_f;
-}
 
 typedef struct {
     bool start, pause, tap;
@@ -1540,34 +1530,17 @@ static actions_t read_input(papp_surface_t *surf, float dt)
     if (dig == 0 && (pad.lx > 5000 || pad.lx < -5000))
         pad_steer = steer_curve(clampf((float)pad.lx / 28000.f, -1.f, 1.f));
 
-    /* the roller: absolute, filtered; it takes over once it is turned */
+    /* the roller: absolute (its position is the steering), lightly filtered, a small dead zone */
     float pot = 0;
     int pv = papp_input_analog(PAPP_ANALOG_PADDLE);
     if (pv >= 0) {
-        if (s_pot_f < 0) {
+        if (s_pot_f < 0)
             s_pot_f = (float)pv;
-            s_pot_ref = (float)pv;
-            s_pot_mid = (float)pv;
-        }
         s_pot_f += ((float)pv - s_pot_f) * fminf(1.f, dt * 30.f);
         s_pot_raw = pv;
-        if (!s_pot_live && fabsf(s_pot_f - s_pot_ref) > 1500.f) {
-            s_pot_live = true;
-            papp_log("dustline: roller in use (%d, centre %d)\n", pv, (int)s_pot_mid);
-        }
-        if (s_pot_live) {
-            float v = (s_pot_f - s_pot_mid) / POT_RANGE;
-            /* a small dead zone round the centre; past full lock the centre follows */
-            if (v > 1.f) {
-                s_pot_mid = s_pot_f - POT_RANGE;
-                v = 1.f;
-            } else if (v < -1.f) {
-                s_pot_mid = s_pot_f + POT_RANGE;
-                v = -1.f;
-            }
-            const float dz = 0.04f;
-            pot = fabsf(v) < dz ? 0 : steer_curve((v - copysignf(dz, v)) / (1.f - dz));
-        }
+        float v = clampf((s_pot_f - POT_MID) / POT_RANGE, -1.f, 1.f);
+        const float dz = 0.03f;
+        pot = fabsf(v) < dz ? 0 : (v - copysignf(dz, v)) / (1.f - dz);
     }
     a.d.steer = pad_steer != 0 ? pad_steer : pot;
 
@@ -2383,17 +2356,13 @@ static int menu(const char *title, const char *const *items, int n)
 static bool pause_menu(void)
 {
     /* papp_ui_menu shows 7 items at most; a saved race is loaded by Continue on the title */
-    enum { M_RESUME, M_CENTRE, M_GHOST, M_SAVE, M_SAVE_EXIT, M_RESTART, M_EXIT };
-    const char *const items[] = { "Resume", "Centre steering", g_ghost_on ? "Ghost: on" : "Ghost: off", "Save race",
-                                  "Save and exit", "Restart race", "Exit" };
-    int r = menu("Dustline", items, 7);
+    enum { M_RESUME, M_GHOST, M_SAVE, M_SAVE_EXIT, M_RESTART, M_EXIT };
+    const char *const items[] = { "Resume", g_ghost_on ? "Ghost: on" : "Ghost: off", "Save race", "Save and exit",
+                                  "Restart race", "Exit" };
+    int r = menu("Dustline", items, 6);
     if (r == M_GHOST) {
         g_ghost_on = !g_ghost_on;
         note(g_ghost_on ? "GHOST ON" : "GHOST OFF");
-    } else
-    if (r == M_CENTRE) {
-        steer_centre();
-        note(s_pot_f >= 0 ? "STEERING CENTRED" : "NO ROLLER");
     } else if (r == M_SAVE || r == M_SAVE_EXIT) {
         bool ok = save_race();
         note(ok ? "RACE SAVED" : (g_state != ST_RACE && g_state != ST_COUNT) ? "NOTHING TO SAVE" : "COULD NOT SAVE");

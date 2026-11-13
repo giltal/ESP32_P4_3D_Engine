@@ -393,8 +393,8 @@ woods, three laps, seen from a chase camera.
   start gantry; you bounce off them. Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
   course, lap and race times, the best lap, speed, gear and the surface.
 - The engine, tyre noise and gravel rumble are synthesised in the game.
-- Controls: the 4.3" board's roller (paddle) steers; it is centred where it is when a race
-  starts (pause menu: Centre steering); full lock is about a quarter of the roller's travel each way, soft round the centre. Pad
+- Controls: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
+  straight ahead, its ends are full lock. Pad
   left/right (ramped in over 0.3 s) or the stick steer too; the wheels turn slower at speed. A gas, B brake
   and reverse, X handbrake, Y back on the road, START pause. Touch: arrows at the bottom left,
   GAS and BRAKE at the bottom right, the top-right corner pauses.
