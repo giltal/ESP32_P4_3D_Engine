@@ -396,9 +396,11 @@ woods, three laps, seen from a chase camera.
 - The engine, tyre noise and gravel rumble are synthesised in the game.
 - Controls: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
   straight ahead, its ends are full lock. Pad
-  left/right (ramped in over 0.3 s) or the stick steer too; the wheels turn slower at speed. A gas, B brake
-  and reverse, X handbrake, Y back on the road, START pause. Touch: arrows at the bottom left,
-  GAS and BRAKE at the bottom right, the top-right corner pauses.
+  left/right (ramped in over 0.3 s) or the stick steer too; the wheels turn slower at speed.
+  Gas: the slider on the left of the screen, a lever that stays where your finger leaves it
+  (it goes back to zero at each start), or R2 (analog) / UP. A or B brakes and takes the gas off
+  while held; DOWN reverses (up to 25 km/h). X handbrake, Y back on the road, START pause.
+  Touch: steering arrows and BRAKE at the bottom right, REV above BRAKE, the top-right corner pauses.
 - Records: best lap and best race (3 laps) in `/sd/data/dustline/records.txt`. Save race and
   Save and exit in the pause menu (`/sd/data/dustline/save.txt`); Continue on the title loads it.
 - Ghost: the best lap drives along as a blue outline (`/sd/data/dustline/ghost.bin`, a pose every

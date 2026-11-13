@@ -19,9 +19,11 @@
  *
  * Controls: the board's roller (paddle) steers, absolute: its middle is
  * straight ahead, its ends full lock. Pad LEFT/RIGHT or the stick steer too
- * (while pressed they win over the roller). A = gas, B = brake / reverse, X = handbrake, Y = back on the road,
- * START or SELECT = pause. Touch: arrows at the bottom left, GAS and BRAKE at
- * the bottom right, the top-right corner pauses.
+ * (while pressed they win over the roller). Gas = the slider on the left of the
+ * screen (a lever: it stays where the finger leaves it), R2 (analog) or UP;
+ * A or B = brake (takes the gas off while held), DOWN = reverse, X = handbrake,
+ * Y = back on the road, START or SELECT = pause. Touch: arrows and BRAKE at the
+ * bottom right, REV above BRAKE, the top-right corner pauses.
  *
  * Arguments: `auto` = the computer drives (for testing; no records, `rec` = they count),
  *            `icon` = a still close-up for the icon, `laps N`, `fps` = show the frame rate.
@@ -938,7 +940,7 @@ static car_t g_car;
 
 typedef struct {
     float steer;                /* -1..1, + = right */
-    float gas, brake;           /* 0..1 */
+    float gas, brake, rev;      /* 0..1; rev = reverse (brakes while still rolling forward) */
     bool  hand, reset;
 } drive_t;
 
@@ -993,13 +995,15 @@ static void car_step(car_t *c, const drive_t *in, float dt)
         drive = in->gas * fminf(CAR_FMAX, CAR_POWER / v);
     }
     float brake = 0;
-    if (in->brake > 0) {
+    if (in->brake > 0 && fabsf(vf) > 0.5f)
+        brake = in->brake * CAR_BRAKE;           /* at a stop it holds the car (below) */
+    if (in->rev > 0) {
         if (vf > 1.f)
-            brake = in->brake * CAR_BRAKE;
+            brake = fmaxf(brake, in->rev * CAR_BRAKE);
         else
-            drive -= in->brake * 5200.f;         /* reverse */
+            drive -= in->rev * 5200.f;           /* reverse */
     }
-    if (vf < -12.f && drive < 0)
+    if (vf < -7.f && drive < 0)
         drive = 0;                               /* reverse is slow */
     float fx_f = drive * 0.4f, fx_r = drive * 0.6f;
     float bsign = vf > 0 ? 1.f : -1.f;
@@ -1055,7 +1059,7 @@ static void car_step(car_t *c, const drive_t *in, float dt)
     if (speed < 2.f) {
         float k = expf(-dt * 6.f);
         vl *= k;
-        if (fabsf(vf) < 1.f && in->gas <= 0 && in->brake <= 0) {
+        if (fabsf(vf) < 1.f && in->gas <= 0 && in->rev <= 0) {
             vf *= k;
             c->r *= k;
         }
@@ -1289,10 +1293,13 @@ static void race_reset(void)
     g_cam_z = g_car.z;
 }
 
+static float s_gas_lever;                 /* the touch gas slider, 0..1 */
+
 static void start_count(void)
 {
     g_state = ST_COUNT;
     g_state_t = 0;
+    s_gas_lever = 0;              /* set it during the count for the launch */
 }
 
 static void new_race(void)
@@ -1486,7 +1493,7 @@ static void track_progress(int prev, int now)
 #define TB_H    50
 static uint32_t s_prev_btn;
 static int s_touch_n;
-static bool s_touch_used;
+static bool s_touch_used = true;        /* the touch controls show from the start (the gas slider) */
 static int s_pot_raw = -1;                /* filtered reading */
 static float s_pot_f = -1.f;
 /* the roller is absolute: 0..65535 maps straight to full left..full right */
@@ -1494,6 +1501,20 @@ static float s_pot_f = -1.f;
 #define POT_RANGE 32768.f                 /* counts from the middle to full lock */
 static float s_pad_steer;                 /* pad left/right and the touch arrows, ramped */
 static float s_touch_dig;                 /* touch arrows held in the last frame: -1, 0, 1 */
+/* the gas slider, left edge: a lever that stays where the finger leaves it */
+#define GS_X    4
+#define GS_W    44
+#define GS_Y0   46                        /* top = full gas */
+#define GS_Y1   234                       /* bottom = no gas */
+#define TBR_X   (W - 166)                 /* touch buttons, bottom right: < > BRAKE */
+#define REV_Y   (TB_Y - 46)               /* REV, above BRAKE */
+static float g_gas_show;                  /* the gas the car gets, for the slider */
+
+static float slider_gas(int y)
+{
+    /* 8 px at each end snap to none / full */
+    return clampf((float)(GS_Y1 - 8 - y) / (float)(GS_Y1 - GS_Y0 - 16), 0.f, 1.f);
+}
 
 /* gentle round the centre, full at the ends: small corrections stay small */
 static float steer_curve(float v)
@@ -1519,10 +1540,16 @@ static actions_t read_input(papp_surface_t *surf, float dt)
         a.start = true;
     if (press & (PAPP_BTN_START | PAPP_BTN_SELECT))
         a.pause = true;
-    if (held & (PAPP_BTN_A | PAPP_BTN_R2 | PAPP_BTN_UP))
-        a.d.gas = 1.f;
-    if (held & (PAPP_BTN_B | PAPP_BTN_L2 | PAPP_BTN_DOWN))
+    /* gas: the slider on the left of the screen (stays where it is left), the right trigger, or UP */
+    float gas = s_gas_lever;
+    if (pad.rt > 2000)
+        gas = fmaxf(gas, (float)pad.rt / 65535.f);
+    else if (held & (PAPP_BTN_R2 | PAPP_BTN_UP))
+        gas = 1.f;
+    if (held & (PAPP_BTN_A | PAPP_BTN_B | PAPP_BTN_L2))
         a.d.brake = 1.f;
+    if (held & PAPP_BTN_DOWN)
+        a.d.rev = 1.f;
     if (held & (PAPP_BTN_X | PAPP_BTN_R1 | PAPP_BTN_L1))
         a.d.hand = true;
     if (press & PAPP_BTN_Y)
@@ -1553,7 +1580,8 @@ static actions_t read_input(papp_surface_t *surf, float dt)
     }
     a.d.steer = pad_steer != 0 ? pad_steer : pot;
 
-    /* touch: arrows bottom left, GAS / BRAKE bottom right, top-right corner pauses */
+    /* touch: the gas slider on the left, steering arrows + BRAKE bottom right, REV above BRAKE,
+       the top-right corner pauses */
     papp_touch_point_t tp[3];
     int n = papp_disp_touch(surf, tp, 3);
     s_touch_dig = 0;
@@ -1564,20 +1592,27 @@ static actions_t read_input(papp_surface_t *surf, float dt)
             if (x > W - 48 && y < 32) {
                 if (s_touch_n == 0)
                     a.pause = true;
-            } else if (y >= TB_Y - 10 && g_state != ST_TITLE) {
-                if (x < 60)
-                    s_touch_dig = -1.f;
-                else if (x < 120)
-                    s_touch_dig = 1.f;
-                else if (x > W - 70)
-                    a.d.gas = 1.f;
-                else if (x > W - 140)
+            } else if (g_state == ST_TITLE) {
+                if (s_touch_n == 0)
+                    a.tap = true;
+            } else if (x < GS_X + GS_W + 14 && y >= GS_Y0 - 8) {
+                s_gas_lever = gas = slider_gas(y);
+            } else if (x >= TBR_X && y >= TB_Y - 10) {
+                if (x >= W - 62)
                     a.d.brake = 1.f;
+                else if (x >= W - 114)
+                    s_touch_dig = 1.f;
+                else
+                    s_touch_dig = -1.f;
+            } else if (x >= W - 62 && y >= REV_Y - 6 && y < TB_Y - 10) {
+                a.d.rev = 1.f;
             } else if (s_touch_n == 0)
                 a.tap = true;
         }
     }
     s_touch_n = n > 0 ? n : 0;
+    /* braking or reversing takes the gas off (the slider stays where it is) */
+    a.d.gas = (a.d.brake > 0 || a.d.rev > 0) ? 0.f : gas;
     return a;
 }
 
@@ -1608,6 +1643,7 @@ static void auto_drive(drive_t *d)
     }
     d->gas = speed < vmax - 1.f ? 1.f : speed < vmax ? 0.4f : 0.f;
     d->brake = speed > vmax + 2.f ? 1.f : 0.f;
+    d->rev = 0;
     d->hand = false;
     d->reset = false;
 }
@@ -1652,21 +1688,23 @@ static void update(const actions_t *act, float dt)
     drive_t in = act->d;
     if (g_state == ST_TITLE || g_auto)
         auto_drive(&in);
-    if (g_auto && g_state == ST_RACE && act->d.brake > 0) {   /* testing: B slows the computer down */
+    if (g_auto && g_state == ST_RACE && act->d.brake > 0) {   /* testing: A/B slows the computer down */
         in.gas = 0;
         in.brake = act->d.brake;
     }
     if (g_state == ST_COUNT) {
-        in.gas = in.brake = 0;
+        in.gas = in.brake = in.rev = 0;
         in.hand = true;
     }
     if (g_state == ST_FINISH) {
         /* roll to a stop */
         in.gas = 0;
         in.brake = 0.3f;
+        in.rev = 0;
         in.hand = false;
     }
     g_hand_held = in.hand;
+    g_gas_show = in.gas;
     if (g_state == ST_COUNT && g_state_t >= 3.f) {
         g_state = ST_RACE;
         g_state_t = 0;
@@ -1784,7 +1822,7 @@ static void update(const actions_t *act, float dt)
     }
     float along = c->vx * g_tr[c->idx].tx + c->vz * g_tr[c->idx].tz;
     g_wrong_t = (along < -4.f && g_state == ST_RACE) ? g_wrong_t + dt : fmaxf(0, g_wrong_t - dt * 2.f);
-    g_stuck_t = (speed < 1.f && (in.gas > 0 || in.brake > 0) && off > 0.f) ? g_stuck_t + dt : 0;
+    g_stuck_t = (speed < 1.f && (in.gas > 0 || in.rev > 0) && off > 0.f) ? g_stuck_t + dt : 0;
     if ((g_off_t > 3.f || g_stuck_t > 4.f) && g_state != ST_FINISH) {
         papp_log("dustline: back on the road at %d (%s)\n", c->idx, g_off_t > 3.f ? "off" : "stuck");
         car_recover();
@@ -2102,16 +2140,35 @@ static void draw_map(uint16_t *px, int x0, int y0)
 
 static void draw_touch(uint16_t *px, const actions_t *a)
 {
-    struct { int x, w; const char *s; bool on; } b[4] = {
-        { 4, 52, "<", a->d.steer < -0.5f }, { 62, 52, ">", a->d.steer > 0.5f },
-        { W - 136, 62, "BRAKE", a->d.brake > 0 }, { W - 68, 64, "GAS", a->d.gas > 0 } };
+    struct { int x, y, w, h; const char *s; bool on; } b[4] = {
+        { TBR_X, TB_Y, 48, TB_H, "<", s_touch_dig < 0 }, { W - 114, TB_Y, 48, TB_H, ">", s_touch_dig > 0 },
+        { W - 62, TB_Y, 58, TB_H, "BRAKE", a->d.brake > 0 }, { W - 62, REV_Y, 58, 36, "REV", a->d.rev > 0 } };
     for (int i = 0; i < 4; i++) {
-        shade_box(px, b[i].x, TB_Y, b[i].x + b[i].w, TB_Y + TB_H, b[i].on ? 8 : 5);
-        frame_box(px, b[i].x, TB_Y, b[i].w, TB_H, b[i].on ? 0xFE60 : 0x8410);
-        int s = strlen(b[i].s) == 1 ? 3 : 1;
-        text_at(px, b[i].x + (b[i].w - text_w(b[i].s, s)) / 2, TB_Y + (TB_H - 7 * s) / 2, b[i].s,
-                b[i].on ? 0xFE60 : 0xE71C, s);
+        shade_box(px, b[i].x, b[i].y, b[i].x + b[i].w, b[i].y + b[i].h, b[i].on ? 8 : 5);
+        frame_box(px, b[i].x, b[i].y, b[i].w, b[i].h, b[i].on ? 0xFE60 : 0x8410);
+        uint16_t col = b[i].on ? 0xFE60 : 0xE71C;
+        if (i < 2) {                      /* the font has no < >: a triangle */
+            int mx = b[i].x + b[i].w / 2, my = b[i].y + b[i].h / 2;
+            for (int k = 0; k < 13; k++) {
+                int hh = i == 0 ? k : 12 - k;
+                fill(px, mx - 6 + k, my - hh, 1, 2 * hh + 1, col);
+            }
+        } else
+            text_at(px, b[i].x + (b[i].w - text_w(b[i].s, 1)) / 2, b[i].y + (b[i].h - 7) / 2, b[i].s, col, 1);
     }
+    /* the gas slider: the bar fills from the bottom, the handle is the lever */
+    int h = GS_Y1 - GS_Y0, lv = (int)(s_gas_lever * (float)(h - 16)) + 8;
+    shade_box(px, GS_X, GS_Y0, GS_X + GS_W, GS_Y1, 5);
+    int fh = (int)(g_gas_show * (float)(h - 16)) + 8;
+    if (g_gas_show > 0)
+        fill(px, GS_X + 2, GS_Y1 - fh, GS_W - 4, fh - 1, 0x2C64);
+    frame_box(px, GS_X, GS_Y0, GS_W, h, 0x8410);
+    for (int q = 1; q < 4; q++)
+        fill(px, GS_X + 1, GS_Y1 - 8 - q * (h - 16) / 4, 6, 1, 0x8410);
+    int hy = GS_Y1 - lv;
+    shade_box(px, GS_X - 2, hy - 6, GS_X + GS_W + 2, hy + 6, 8);
+    frame_box(px, GS_X - 2, hy - 6, GS_W + 4, 12, 0xFE60);
+    text_at(px, GS_X + (GS_W - text_w("GAS", 1)) / 2, GS_Y0 + 4, "GAS", 0xE71C, 1);
 }
 
 static void draw_hud(uint16_t *px, const actions_t *act, float fps)
@@ -2124,7 +2181,7 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         text_c(px, 96, "A RALLY STAGE AGAINST THE CLOCK", 0xFE60, 1);
         if (((int)(g_t * 2.f)) & 1)
             text_c(px, 116, "PRESS A OR TAP TO RACE", 0xFFFF, 1);
-        text_c(px, 134, "ROLLER OR LEFT/RIGHT STEERS   A GAS   B BRAKE", 0xA534, 1);
+        text_c(px, 134, "ROLLER STEERS   GAS SLIDER OR R2   A BRAKE   DOWN REVERSE", 0xA534, 1);
         text_c(px, 144, "X HANDBRAKE   Y BACK ON THE ROAD   START PAUSE", 0xA534, 1);
         fmt_time(t1, sizeof(t1), g_best_lap);
         fmt_time(t2, sizeof(t2), g_best_race);
@@ -2153,21 +2210,22 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
     text_at(px, W - MAP_W - 18, 4, "II", 0xC618, 1);
     /* speed, gear and the steering, bottom centre */
     int kmh = (int)(hypotf(c->vx, c->vz) * 3.6f + 0.5f);
-    shade_box(px, W / 2 - 92, H - 36, W / 2 + 54, H - 2, 5);
+    int cx = s_touch_used && g_state != ST_FINISH ? GS_X + GS_W + 104 : W / 2;   /* clear of the slider and buttons */
+    shade_box(px, cx - 92, H - 36, cx + 54, H - 2, 5);
     snprintf(line, sizeof(line), "%d", kmh);
-    text_r(px, W / 2 + 14, H - 31, line, 0xFFFF, 3);
-    text_at(px, W / 2 + 18, H - 31, "KM/H", 0xBDF7, 1);
-    snprintf(line, sizeof(line), "%c", c->vf < -0.5f && act->d.brake > 0 ? 'R' : (char)('0' + c->gear));
-    text_at(px, W / 2 + 18, H - 21, line, 0xFE60, 2);
-    text_at(px, W / 2 - 88, H - 31, surf_name[c->surf], c->surf == SURF_TARMAC ? 0xC618 : 0xFD20, 1);
+    text_r(px, cx + 14, H - 31, line, 0xFFFF, 3);
+    text_at(px, cx + 18, H - 31, "KM/H", 0xBDF7, 1);
+    snprintf(line, sizeof(line), "%c", c->vf < -0.5f && act->d.rev > 0 ? 'R' : (char)('0' + c->gear));
+    text_at(px, cx + 18, H - 21, line, 0xFE60, 2);
+    text_at(px, cx - 88, H - 31, surf_name[c->surf], c->surf == SURF_TARMAC ? 0xC618 : 0xFD20, 1);
     /* steering bar */
-    int bx = W / 2 - 50, by = H - 8, bw = 100;
+    int bx = cx - 50, by = H - 8, bw = 100;
     fill(px, bx, by, bw, 3, 0x4208);
     fill(px, bx + bw / 2, by - 1, 1, 5, 0x8410);
     int sx = bx + bw / 2 + (int)(g_steer_show * (float)(bw / 2 - 2));
     fill(px, sx - 2, by - 1, 5, 5, 0xFE60);
     if (g_hand_held && g_state == ST_RACE)
-        text_at(px, W / 2 - 88, H - 21, "HANDBRAKE", 0xF800, 1);
+        text_at(px, cx - 88, H - 21, "HANDBRAKE", 0xF800, 1);
 
     if (s_touch_used && g_state != ST_FINISH)
         draw_touch(px, act);
