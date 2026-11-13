@@ -18,7 +18,7 @@ P = {k: cdef(k) for k in ["CAR_M", "CAR_I", "CAR_A", "CAR_B", "CAR_CF", "CAR_CR"
 # as in main.c: SAT_* = side force kept past the peak, RG = rear grip, DF = front drive share,
 # SL = lock lost with speed, SR = wheel turn rate in full locks/s (0 = 2.6 rad/s), RGL = rear grip on the loose surfaces, TC / ABS = least share of grip left to drive / brakes, WT = weight transfer, BB = front brake share
 P.update(dict(SAT_F=1.0, SAT_R=1.0, AUTO_MU=0.6, AUTO_K=2.6, AUTO_SLIDE=1.2, HAND=0.45, WT=0.55, BB=0.6, YD=0.0,
-              ABS=0.5, HOR=45, RG=1.15, RGL=1.15, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08, SL=0.045, SR=0.0))
+              ABS=0.5, HOR=45, RG=1.15, RGL=1.10, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08, SL=0.065, SR=3.5))
 for a in sys.argv[1:]:
     k, v = a.split("=")
     P[k] = float(v)
@@ -26,7 +26,7 @@ for a in sys.argv[1:]:
 SURF = {"SURF_TARMAC": 0, "SURF_DIRT": 1, "SURF_GRAVEL": 2}
 ctrl = [(float(x), float(z), SURF[s]) for x, z, s in
         re.findall(r"\{\s*([-0-9.]+),\s*([-0-9.]+),\s*(SURF_\w+)\s*\}", SRC.split("k_ctrl[] = {")[1].split("};")[0])]
-MU = [1.05, 0.80, 0.70, 0.62, 0.50]
+MU = [1.05, P.get("MD", 0.90), P.get("MG", 0.82), 0.62, 0.50]   # MD / MG = dirt / gravel grip
 DRAGS = [0, 30, 50, 220, 420]
 G = 9.81
 STEP = 2.0

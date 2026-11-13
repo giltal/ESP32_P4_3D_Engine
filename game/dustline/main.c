@@ -328,7 +328,7 @@ static void draw_obj(e3d_t *e, const e3d_mesh *mesh, const e3d_mat *m, int32_t r
  * that starts at each. Sampled with a Catmull-Rom spline, then every STEP m. */
 enum { SURF_TARMAC, SURF_DIRT, SURF_GRAVEL, SURF_VERGE, SURF_GRASS };
 static const char *const surf_name[] = { "TARMAC", "DIRT", "GRAVEL", "VERGE", "GRASS" };
-static const float surf_mu[]   = { 1.05f, 0.80f, 0.70f, 0.62f, 0.50f };
+static const float surf_mu[]   = { 1.05f, 0.90f, 0.82f, 0.62f, 0.50f };
 static const float surf_drag[] = { 0.f, 30.f, 50.f, 220.f, 420.f };   /* rolling resistance, N per m/s */
 
 typedef struct { float x, z; uint8_t surf; } ctrl_t;
@@ -1018,7 +1018,9 @@ static void car_step(car_t *c, const drive_t *in, float dt)
     /* friction circle per axle (the handbrake locks the rear: little side grip) */
     /* the rear grips a little more than the front: at the limit the car runs wide rather than
        spins (the handbrake or a lift is what swings the tail) */
-    float cap_f = mu * nf, cap_r = mu * nr * 1.15f * (in->hand ? 0.45f : 1.f);
+    /* the rear grips more than the front (it runs wide at the limit), a little less so on the
+     * loose stuff, where the tail comes round; lower than 1.1 and it spins */
+    float cap_f = mu * nf, cap_r = mu * nr * (c->surf == SURF_TARMAC ? 1.15f : 1.10f) * (in->hand ? 0.45f : 1.f);
     /* traction control and ABS: the side force keeps what it needs, drive and brakes get the rest
        (at least 30% / 50% of the grip) */
     fx_f = long_room(fx_f, cap_f, c->pf, false);

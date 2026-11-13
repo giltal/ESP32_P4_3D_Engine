@@ -388,7 +388,7 @@ woods, three laps, seen from a chase camera.
   circle per axle, weight transfer, four-wheel drive (40/60), traction control and ABS that
   leave the tyres their side grip. The rear grips a little more than the front, so at the
   limit the car runs wide; the handbrake throws the tail out. Grip by surface: tarmac 1.05,
-  dirt 0.8, gravel 0.7, verge 0.62, grass 0.5 (and drag).
+  dirt 0.9, gravel 0.82 (the rear a little looser there), verge 0.62, grass 0.5 (and drag).
 - Pines, birches, rocks, hay bales on the outside of the sharp corners, marker posts and the
   start gantry; you bounce off them. Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
   course, lap and race times, the best lap, speed, gear and the surface.
