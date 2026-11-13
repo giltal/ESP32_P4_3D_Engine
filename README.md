@@ -388,8 +388,8 @@ woods, three laps, seen from a chase camera.
   circle per axle, weight transfer, four-wheel drive (40/60), traction control and ABS that
   leave the tyres their side grip. The rear grips a little more than the front, so at the
   limit the car runs wide; the handbrake throws the tail out. A stability aid pulls the turn
-  rate towards what the front wheels ask (within the grip), so slides stop when you straighten. Grip by surface: tarmac 1.05,
-  dirt 0.9, gravel 0.82 (the rear a little looser there), verge 0.62, grass 0.5 (and drag).
+  rate towards what the front wheels ask (within the grip), so slides stop when you straighten. Grip by surface: tarmac 1.15,
+  dirt 1.1, gravel 1.05 (arcade grip, so the loose surfaces still turn at speed; the rear a little looser there), verge 0.62, grass 0.5 (and drag).
 - Pines, birches, rocks, hay bales on the outside of the sharp corners, marker posts and the
   start gantry; you bounce off them. Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
   course, lap and race times, the best lap, speed, gear and the surface.
@@ -397,7 +397,7 @@ woods, three laps, seen from a chase camera.
 - Controls: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
   straight ahead, its ends are full lock. Pad
   left/right (ramped in over 0.3 s) or the stick steer too; the wheels turn slower at speed.
-  Gas: the slider on the left of the screen, a lever that stays where your finger leaves it
+  Gas: the slider on the left of the screen (half its height, centred), a lever that stays where your finger leaves it
   (it goes back to zero at each start), or R2 (analog) / UP. A or B brakes and takes the gas off
   while held; DOWN reverses (up to 25 km/h). X handbrake, Y back on the road, START pause.
   Touch: steering arrows and BRAKE at the bottom right, REV above BRAKE, the top-right corner pauses.

@@ -26,7 +26,7 @@ for a in sys.argv[1:]:
 SURF = {"SURF_TARMAC": 0, "SURF_DIRT": 1, "SURF_GRAVEL": 2}
 ctrl = [(float(x), float(z), SURF[s]) for x, z, s in
         re.findall(r"\{\s*([-0-9.]+),\s*([-0-9.]+),\s*(SURF_\w+)\s*\}", SRC.split("k_ctrl[] = {")[1].split("};")[0])]
-MU = [1.05, P.get("MD", 0.90), P.get("MG", 0.82), 0.62, 0.50]   # MD / MG = dirt / gravel grip
+MU = [P.get("MT", 1.15), P.get("MD", 1.10), P.get("MG", 1.05), 0.62, 0.50]   # MT / MD / MG = tarmac / dirt / gravel grip
 DRAGS = [0, 30, 50, 220, 420]
 G = 9.81
 STEP = 2.0

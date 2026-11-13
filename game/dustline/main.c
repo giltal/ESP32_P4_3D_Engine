@@ -330,7 +330,7 @@ static void draw_obj(e3d_t *e, const e3d_mesh *mesh, const e3d_mat *m, int32_t r
  * that starts at each. Sampled with a Catmull-Rom spline, then every STEP m. */
 enum { SURF_TARMAC, SURF_DIRT, SURF_GRAVEL, SURF_VERGE, SURF_GRASS };
 static const char *const surf_name[] = { "TARMAC", "DIRT", "GRAVEL", "VERGE", "GRASS" };
-static const float surf_mu[]   = { 1.05f, 0.90f, 0.82f, 0.62f, 0.50f };
+static const float surf_mu[]   = { 1.15f, 1.10f, 1.05f, 0.62f, 0.50f };   /* arcade grip: loose still turns at speed */
 static const float surf_drag[] = { 0.f, 30.f, 50.f, 220.f, 420.f };   /* rolling resistance, N per m/s */
 
 typedef struct { float x, z; uint8_t surf; } ctrl_t;
@@ -1504,8 +1504,8 @@ static float s_touch_dig;                 /* touch arrows held in the last frame
 /* the gas slider, left edge: a lever that stays where the finger leaves it */
 #define GS_X    4
 #define GS_W    44
-#define GS_Y0   46                        /* top = full gas */
-#define GS_Y1   234                       /* bottom = no gas */
+#define GS_Y0   (H / 2 - 47)              /* top = full gas; half the screen height, centred */
+#define GS_Y1   (H / 2 + 47)              /* bottom = no gas */
 #define TBR_X   (W - 166)                 /* touch buttons, bottom right: < > BRAKE */
 #define REV_Y   (TB_Y - 46)               /* REV, above BRAKE */
 static float g_gas_show;                  /* the gas the car gets, for the slider */
@@ -1595,7 +1595,7 @@ static actions_t read_input(papp_surface_t *surf, float dt)
             } else if (g_state == ST_TITLE) {
                 if (s_touch_n == 0)
                     a.tap = true;
-            } else if (x < GS_X + GS_W + 14 && y >= GS_Y0 - 8) {
+            } else if (x < GS_X + GS_W + 14 && y >= GS_Y0 - 14 && y <= GS_Y1 + 14) {
                 s_gas_lever = gas = slider_gas(y);
             } else if (x >= TBR_X && y >= TB_Y - 10) {
                 if (x >= W - 62)
