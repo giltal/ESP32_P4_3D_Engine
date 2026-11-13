@@ -1486,7 +1486,7 @@ static float s_pot_f = -1.f;
 static float s_pot_mid = -1.f;            /* reading at straight ahead */
 static bool s_pot_live;                   /* the roller has been turned */
 static float s_pot_ref;
-#define POT_RANGE 18000.f                 /* counts from the centre to full lock (about a quarter turn) */
+#define POT_RANGE 18000.f                 /* counts from the centre to full lock (of 0..65535) */
 static float s_pad_steer;                 /* pad left/right and the touch arrows, ramped */
 static float s_touch_dig;                 /* touch arrows held in the last frame: -1, 0, 1 */
 
