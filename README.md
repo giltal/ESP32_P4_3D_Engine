@@ -368,10 +368,12 @@ once.
 ## A fourth game: Dustline
 
 <p align="center">
-  <img src="docs/images/dustline.png" width="49%" alt="Dustline: the rally car from behind on a dirt road through pines, wheel ruts, hills on the horizon">
+  <img src="docs/images/dustline.png" width="49%" alt="Dustline: the red rally car from behind on the tarmac, pines, bushes and hills on the horizon">
   <img src="docs/images/dustline_gravel.png" width="49%" alt="The gravel section: a grey road with ruts, birches, hay bales and marker posts">
   <img src="docs/images/dustline_start.png" width="49%" alt="The start gantry with spectators on both sides, clouds in the sky and the lake on the right">
   <img src="docs/images/dustline_ghost.png" width="49%" alt="The ghost of the best lap ahead on the gravel, and the split time against it, +3.29 in red">
+  <img src="docs/images/dustline_notes.png" width="49%" alt="A pace note sign at the top: an arrow bending right, 2 RIGHT, and INTO 2 left">
+  <img src="docs/images/dustline_evening.png" width="49%" alt="Evening: a golden sky and haze, long shadows, the HAIRPIN R sign into a 1">
 </p>
 
 `game/dustline` is a rally stage against the clock: one car on a closed course through the
@@ -390,8 +392,11 @@ woods, three laps, seen from a chase camera.
   limit the car runs wide; the handbrake throws the tail out. A stability aid pulls the turn
   rate towards what the front wheels ask (within the grip), so slides stop when you straighten. Grip by surface: tarmac 1.15,
   dirt 1.1, gravel 1.05 (arcade grip, so the loose surfaces still turn at speed; the rear a little looser there), verge 0.62, grass 0.5 (and drag).
+- The car is a red rally hatchback: white roof, a white and yellow band along the doors, door
+  number panels, wheel arch flares, a light pod on the nose and a rear wing.
 - Pines, birches, rocks, hay bales on the outside of the sharp corners, marker posts and the
-  start gantry; you bounce off them. Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
+  start gantry; you bounce off them. Low bushes along the verges (near detail only; you drive
+  through them). Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
   course, lap and race times, the best lap, speed, gear and the surface.
 - The engine, tyre noise and gravel rumble are synthesised in the game.
 - Controls: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
@@ -403,11 +408,21 @@ woods, three laps, seen from a chase camera.
   Touch: steering arrows and BRAKE at the bottom right, REV above BRAKE, the top-right corner pauses.
 - Records: best lap and best race (3 laps) in `/sd/data/dustline/records.txt`. Save race and
   Save and exit in the pause menu (`/sd/data/dustline/save.txt`); Continue on the title loads it.
+- Pace notes: the corners are found from the course's curvature and graded like a co-driver's
+  notes, 1 (tightest) to 6 (fast) by the smallest radius, HAIRPIN for a tight turn of more than
+  140 degrees, LONG for one that goes on. A sign at the top shows the next corner (an arrow bent
+  by its angle, the grade, yellow / orange / red) from about 3 s before it until you are into it,
+  with an INTO box when the next corner follows within 40 m. The course has 11 notes.
+- Evening (pause menu, saved in `/sd/data/dustline/settings.txt`, or the `evening` argument): a
+  low golden sun with long shadows, a golden sky and haze (the engine's fog) towards the horizon.
+  The sky is painted, so the game fades it to the fog colour itself (`fog_keep_bg`).
 - Ghost: the best lap drives along as a blue outline (`/sd/data/dustline/ghost.bin`, a pose every
   0.1 s); at a quarter, half and three quarters of the lap the split against it shows under the
   times, red when behind. Pause menu: Ghost on/off.
 
-It runs at 55-60 fps on the Guition 4.3" (about 700-1300 triangles drawn of 4-8k sent).
+On the Guition 4.3", over an autopilot lap: 49 fps average, 42 in the worst second (geometry
+6.6 ms + rasterising 7.8 ms a frame). Evening: 42 fps, 37 in the worst second; the low sun costs
+nothing, the fog about 3.5 ms a frame (it touches every pixel).
 
 ```bash
 python game/dustline/build.py           # -> build/dustline/dustline.papp
@@ -415,7 +430,8 @@ python game/dustline/build.py           # -> build/dustline/dustline.papp
 
 Pass `auto` to let the computer drive (its times do not count, unless `rec`; B slows it down, to
 see the ghost pull away), `laps N` (race records count for 3 laps only), or
-`fps` to show the frame rate.
+`fps` to show the frame rate, `evening` for the evening look (`nofog`: without the haze, to
+measure it). Each lap logs a `perf` line: average fps, the worst second, render times.
 
 ---
 

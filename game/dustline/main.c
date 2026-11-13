@@ -497,9 +497,9 @@ static float lateral(int k, float x, float z)
 }
 
 /* ── Scenery: trees, rocks, marker posts, the start gantry ───────────────── */
-enum { OBJ_PINE, OBJ_BIRCH, OBJ_ROCK, OBJ_POST, OBJ_PILLAR, OBJ_HAY, OBJ_FAN };
+enum { OBJ_PINE, OBJ_BIRCH, OBJ_ROCK, OBJ_POST, OBJ_PILLAR, OBJ_HAY, OBJ_FAN, OBJ_BUSH };
 typedef struct { float x, z, r, s, rot; uint8_t kind, chunk; } prop_t;
-#define MAX_PROPS 1400
+#define MAX_PROPS 2200
 static prop_t g_prop[MAX_PROPS];
 static int    g_nprops;
 
@@ -650,6 +650,29 @@ static void place_props(void)
             add_prop(g_tr[0].x + rx * off + g_tr[0].tx * along, g_tr[0].z + rz * off + g_tr[0].tz * along, OBJ_FAN,
                      0.9f + rnd() * 0.2f, 0.4f);
         }
+    /* bushes along the verges: near detail only, you drive through them. Their own random numbers,
+       so the rest of the scenery stays where it was */
+    uint32_t br = 0xB5u;
+#define BRND() ((br = br * 1664525u + 1013904223u), (float)(br >> 8) * (1.f / 16777216.f))
+    for (int k = 1; k < g_ns; k += 2)
+        for (int side = -1; side <= 1; side += 2) {
+            if (BRND() > 0.4f)
+                continue;
+            const samp_t *t = &g_tr[k];
+            float rx, rz;
+            samp_right(t, &rx, &rz);
+            float off = t->hw + VERGE_W + 1.2f + BRND() * BRND() * 9.f;
+            float x = t->x + rx * off * (float)side + t->tx * (BRND() - 0.5f) * 3.f;
+            float z = t->z + rz * off * (float)side + t->tz * (BRND() - 0.5f) * 3.f;
+            float sc = 0.7f + BRND() * 0.6f;
+            if (road_gap(x, z) < VERGE_W + 0.8f || lake_dist(x, z, 1.5f) < 1.f)
+                continue;
+            if (g_nprops < MAX_PROPS) {
+                int kk = nearest_sample(x, z, -1, 0);
+                g_prop[g_nprops++] = (prop_t){ x, z, 0, sc, BRND() * 6.2832f, OBJ_BUSH, (uint8_t)(kk / CHUNK) };
+            }
+        }
+#undef BRND
     /* the grid */
     g_gx0 = g_bx0 - 60.f;
     g_gz0 = g_bz0 - 60.f;
@@ -807,6 +830,22 @@ static void b_tree(const prop_t *p, bool far)
             for (int b = 2; b < 4; b++)
                 for (int d = 4; d < 6; d++)
                     b_tri(v0 + a, v0 + b, v0 + d, (a + d) & 1 ? 0x8C8A84 : 0x7A7872, c);
+    } else if (p->kind == OBJ_BUSH && !far) {
+        /* a low mound on the ground: four corners and a top, two greens */
+        float r = 1.0f * p->s, cy = 0.02f, a = p->rot;
+        float ca = cosf(a), sa = sinf(a);
+        int v0 = B.nv;
+        b_v(p->x + r * ca, cy, p->z + r * sa);
+        b_v(p->x - r * ca, cy, p->z - r * sa);
+        b_v(p->x, 0.85f * p->s, p->z);
+        b_v(p->x, -0.05f, p->z);
+        b_v(p->x - r * 0.8f * sa, cy, p->z + r * 0.8f * ca);
+        b_v(p->x + r * 0.8f * sa, cy, p->z - r * 0.8f * ca);
+        float c[3] = { p->x, 0.2f, p->z };
+        for (int a2 = 0; a2 < 2; a2++)
+            for (int b = 2; b < 3; b++)            /* the top half only: the bottom is under the ground */
+                for (int d = 4; d < 6; d++)
+                    b_tri(v0 + a2, v0 + b, v0 + d, (a2 + d) & 1 ? 0x46702E : 0x3C6428, c);
     } else if (p->kind == OBJ_POST && !far) {
         b_box(p->x - 0.1f, 0, p->z - 0.1f, p->x + 0.1f, 1.0f, p->z + 0.1f, 0xF0F0F0);
         b_box(p->x - 0.11f, 0.7f, p->z - 0.11f, p->x + 0.11f, 0.9f, p->z + 0.11f, 0xE03020);
@@ -1097,8 +1136,8 @@ static float car_collide(car_t *c)
             int cell = j * g_gw + i;
             for (int q = g_gstart[cell]; q < g_gstart[cell + 1]; q++) {
                 const prop_t *p = &g_prop[g_gidx[q]];
-                if (p->kind == OBJ_POST)
-                    continue;            /* knocked flat, no matter */
+                if (p->kind == OBJ_POST || p->kind == OBJ_BUSH)
+                    continue;            /* knocked flat / driven through, no matter */
                 float dx = c->x - p->x, dz = c->z - p->z, rr = p->r * p->s + CAR_R;
                 if (p->kind == OBJ_PILLAR || p->kind == OBJ_HAY)
                     rr = p->r + CAR_R;
@@ -1148,7 +1187,7 @@ static float g_lap_times[9];
 static float g_best_lap = 0, g_best_race = 0;   /* records, 0 = none */
 static bool  g_new_lap_rec, g_new_race_rec;
 static float g_wrong_t, g_off_t, g_stuck_t;
-static bool  g_auto, g_icon, g_auto_rec, g_show_fps;   /* g_auto_rec: the computer's times count (testing) */
+static bool  g_auto, g_icon, g_auto_rec, g_show_fps, g_evening;   /* g_auto_rec: the computer's times count (testing) */
 static float g_msg_t;
 static const char *g_msg;
 static float g_shake;
@@ -1164,6 +1203,29 @@ static void note(const char *msg)
 #define DATA_DIR    "/sd/data/dustline"
 #define REC_PATH    DATA_DIR "/records.txt"
 #define SAVE_PATH   DATA_DIR "/save.txt"
+#define SET_PATH    DATA_DIR "/settings.txt"
+static bool g_look_dirty, g_nofog, g_notes_on = true;     /* g_nofog: test switch (evening without the haze) */                 /* the evening switch changed: apply_look in the main loop */
+
+static void settings_io(bool save)
+{
+    if (save) {
+        mkdir("/sd/data", 0777);
+        mkdir(DATA_DIR, 0777);
+        FILE *f = fopen(SET_PATH, "w");
+        if (f) {
+            fprintf(f, "evening=%d\n", g_evening ? 1 : 0);
+            fclose(f);
+        }
+    } else {
+        FILE *f = fopen(SET_PATH, "r");
+        if (f) {
+            int v;
+            if (fscanf(f, "evening=%d", &v) == 1)
+                g_evening = v != 0;
+            fclose(f);
+        }
+    }
+}
 
 static void records_io(bool save)
 {
@@ -1863,18 +1925,58 @@ static uint16_t s_cl_lit[H], s_cl_dark[H];
 static int      s_cl_min = 255, s_cl_max;
 static int      s_horizon;
 
+/* Evening: a low golden sun and haze (fog) towards the horizon. The sky rows are not fogged by
+   the engine (fog_keep_bg), so their colours fade to the fog colour here, by the depth of the
+   ground each row shows. */
+#define FOG_RGB      0xE8B888
+#define FOG_DENSITY  0.005f
+static void make_palette(void)
+{
+    bool ev = g_evening;
+    for (int y = 0; y < H; y++) {
+        float t = clampf((float)y / (float)(s_horizon > 0 ? s_horizon : 1), 0, 1);
+        s_sky[y] = rgb565(ev ? mix_rgb(0x34488C, FOG_RGB, powf(t, 1.7f)) : mix_rgb(0x4C86D0, 0xCFE2EE, t * t));
+        float g = clampf((float)(y - s_horizon) / (float)(H - s_horizon), 0, 1);
+        uint32_t grass = ev ? mix_rgb(0x7E8A4C, 0x40622A, sqrtf(g)) : mix_rgb(0x8EA068, 0x4E7A2C, sqrtf(g));
+        if (ev && y >= s_horizon) {
+            /* the ground this row shows, and the fog the engine would give it */
+            float a = atanf(((float)y + 0.5f - H * 0.5f) / FOCAL) - CAM_PITCH * RAD;
+            float d = a > 0.002f ? CAM_UP / tanf(a) : 2000.f;
+            grass = mix_rgb(FOG_RGB, grass, expf(-d * FOG_DENSITY));
+        }
+        s_grass[y] = rgb565(grass);
+        float hz = clampf((float)(s_horizon - y) / 40.f, 0, 1);
+        if (ev) {
+            s_far_c[y] = rgb565(mix_rgb(mix_rgb(0x9A88A8, 0x7C6C90, hz), FOG_RGB, 0.5f));
+            s_near_c[y] = rgb565(mix_rgb(mix_rgb(0x4C5A3A, 0x3A4A30, hz), FOG_RGB, 0.32f));
+            s_cl_lit[y] = rgb565(0xFFDCAE);
+            s_cl_dark[y] = rgb565(0xC88E8C);
+        } else {
+            s_far_c[y] = rgb565(mix_rgb(0x8AA0B8, 0x6E86A2, hz));
+            s_near_c[y] = rgb565(mix_rgb(0x3E5E3A, 0x2C4A2A, hz));
+            s_cl_lit[y] = rgb565(0xF6F8FA);
+            s_cl_dark[y] = rgb565(0xC4CEDA);
+        }
+    }
+}
+
+static void apply_look(e3d_t *e)
+{
+    e3d_params *par = e3d_params_get(e);
+    par->ambient = g_evening ? 0.36f : 0.42f;
+    par->diffuse = g_evening ? 0.86f : 0.80f;
+    par->specular = g_evening ? 0.50f : 0.35f;
+    par->shadow_dark = g_evening ? 0.50f : 0.55f;
+    par->fog_density = g_evening && !g_nofog ? FOG_DENSITY : 0.f;
+    par->fog_rgb565 = rgb565(FOG_RGB);
+    par->fog_keep_bg = true;
+    make_palette();
+}
+
 static void make_background(void)
 {
     s_horizon = (int)(H * 0.5f - FOCAL * tanf(-CAM_PITCH * RAD) + 0.5f);
-    for (int y = 0; y < H; y++) {
-        float t = clampf((float)y / (float)(s_horizon > 0 ? s_horizon : 1), 0, 1);
-        s_sky[y] = rgb565(mix_rgb(0x4C86D0, 0xCFE2EE, t * t));
-        float g = clampf((float)(y - s_horizon) / (float)(H - s_horizon), 0, 1);
-        s_grass[y] = rgb565(mix_rgb(0x8EA068, 0x4E7A2C, sqrtf(g)));
-        float hz = clampf((float)(s_horizon - y) / 40.f, 0, 1);
-        s_far_c[y] = rgb565(mix_rgb(0x8AA0B8, 0x6E86A2, hz));
-        s_near_c[y] = rgb565(mix_rgb(0x3E5E3A, 0x2C4A2A, hz));
-    }
+    make_palette();
     /* hills: sums of sines, wrapping round */
     for (int i = 0; i < HILLS; i++) {
         float a = (float)i / HILLS * 6.2832f;
@@ -1887,10 +1989,6 @@ static void make_background(void)
     for (int i = 0; i < HILLS; i++) {
         s_cl_lo[i] = 255;
         s_cl_hi[i] = 0;
-    }
-    for (int y = 0; y < H; y++) {
-        s_cl_lit[y] = rgb565(0xF6F8FA);
-        s_cl_dark[y] = rgb565(0xC4CEDA);
     }
     uint32_t r = 0x5EEDu;
 #define CRND() ((r = r * 1664525u + 1013904223u), (float)(r >> 8) * (1.f / 16777216.f))
@@ -1971,8 +2069,11 @@ static void draw_scene(e3d_t *e)
     if (g_icon)
         *cam = (e3d_camera){ .pos = { c->x + 4.2f, 1.9f, c->z + 4.9f }, .heading = -128.f, .pitch = -13.f };
     bg_columns(cam->heading);
-    /* the sun: high and to the left, moving with the car (the shadow stays the same) */
-    *e3d_light_get(e) = (e3d_light){ .pos = { c->x - 60.f, 300.f, c->z - 170.f }, .r = 255, .g = 246, .b = 232 };
+    /* the sun: high and to the left (evening: low and golden), moving with the car (the shadow stays the same) */
+    if (g_evening)
+        *e3d_light_get(e) = (e3d_light){ .pos = { c->x - 230.f, 85.f, c->z - 120.f }, .r = 255, .g = 194, .b = 128 };
+    else
+        *e3d_light_get(e) = (e3d_light){ .pos = { c->x - 60.f, 300.f, c->z - 170.f }, .r = 255, .g = 246, .b = 232 };
 
     /* the course: chunks in front of the camera, near ones in detail */
     float cx = cam->pos[0], cz = cam->pos[2];
@@ -2093,6 +2194,196 @@ static void frame_box(uint16_t *px, int x, int y, int w, int h, uint16_t col)
     fill(px, x, y + h - 1, w, 1, col);
     fill(px, x, y, 1, h, col);
     fill(px, x + w - 1, y, 1, h, col);
+}
+
+/* ── Pace notes ─────────────────────────────────────────────────────────────
+ * The corners, found once from the course's curvature, graded like a co-driver's
+ * notes: 1 (tightest) .. 6 (fast) by the smallest radius, HAIRPIN for a tight
+ * turn of more than 140 degrees, LONG for one that goes on. A sign at the top
+ * shows the next corner from a few seconds before it until the car is into it,
+ * with the one straight after it ("into") when it follows within 40 m. */
+typedef struct {
+    int start, len;             /* samples */
+    int8_t dir;                 /* +1 right, -1 left */
+    uint8_t grade;              /* 1..6, 0 = hairpin */
+    bool lng;
+} note_t;
+#define MAX_NOTES 48
+static note_t g_note[MAX_NOTES];
+static int    g_nnotes;
+
+static void make_notes(void)
+{
+    static float cs[2048];
+    if (g_ns > 2048)
+        return;
+    for (int k = 0; k < g_ns; k++) {           /* curvature smoothed over +-8 m */
+        float a = 0;
+        for (int d = -4; d <= 4; d++)
+            a += g_tr[(k + d + g_ns) % g_ns].curv;
+        cs[k] = a / 9.f;
+    }
+    const float on = 1.f / 200.f;              /* a radius under 200 m is a corner */
+    int k0 = 0;                                /* start the scan on a straight bit */
+    while (k0 < g_ns && fabsf(cs[k0]) >= on)
+        k0++;
+    g_nnotes = 0;
+    int i = 0;
+    while (i < g_ns && g_nnotes < MAX_NOTES) {
+        int k = (k0 + i) % g_ns;
+        if (fabsf(cs[k]) < on) {
+            i++;
+            continue;
+        }
+        int dir = cs[k] > 0 ? 1 : -1, n = 0, gap = 0, last = 0;
+        float ang = 0, cmax = 0;
+        /* the corner goes on while it turns the same way; short straighter bits (< 16 m) don't end it */
+        while (i + n < g_ns) {
+            float c = cs[(k + n) % g_ns] * (float)dir;
+            if (c >= on) {
+                gap = 0;
+                last = n;
+                ang += c * STEP;
+                cmax = fmaxf(cmax, c);
+            } else if (++gap > 8)
+                break;
+            n++;
+        }
+        n = last + 1;                          /* up to its last turning sample */
+        i += n;
+        float deg = ang * DEG, rmin = 1.f / cmax;
+        if (deg < 18.f)
+            continue;                          /* a kink: no note */
+        note_t *t = &g_note[g_nnotes++];
+        t->start = k;
+        t->len = n;
+        t->dir = (int8_t)dir;
+        t->grade = rmin < 25.f ? 1 : rmin < 40.f ? 2 : rmin < 60.f ? 3 : rmin < 90.f ? 4 : rmin < 130.f ? 5 : 6;
+        if (deg > 140.f && rmin < 35.f)
+            t->grade = 0;
+        t->lng = n * STEP > 70.f && deg > 60.f;
+    }
+    char line[200];
+    int o = 0;
+    for (int j = 0; j < g_nnotes && o < (int)sizeof(line) - 12; j++)
+        o += snprintf(line + o, sizeof(line) - (size_t)o, " %c%d%s", g_note[j].dir > 0 ? 'R' : 'L', g_note[j].grade,
+                      g_note[j].lng ? "+" : "");
+    papp_log("dustline: %d pace notes:%s\n", g_nnotes, line);
+}
+
+/* the note to show now (-1 none) and the one it runs into (-1 none) */
+static int note_now(int *into)
+{
+    const car_t *c = &g_car;
+    float speed = hypotf(c->vx, c->vz);
+    float look = clampf(speed * 3.f, 70.f, 170.f) / STEP;   /* samples */
+    int best = -1, bd = 1 << 30;
+    for (int j = 0; j < g_nnotes; j++) {
+        int d = (g_note[j].start - c->idx + g_ns) % g_ns;
+        if (d > g_ns / 2)
+            d -= g_ns;                         /* behind: negative */
+        if (d > look || d < -(int)(g_note[j].len * 0.4f) - 2)
+            continue;
+        if (d < bd) {
+            bd = d;
+            best = j;
+        }
+    }
+    *into = -1;
+    if (best >= 0) {
+        const note_t *a = &g_note[best], *b = &g_note[(best + 1) % g_nnotes];
+        int gap = (b->start - (a->start + a->len) + 2 * g_ns) % g_ns;
+        if (g_nnotes > 1 && gap * STEP < 40.f)
+            *into = (best + 1) % g_nnotes;
+    }
+    return best;
+}
+
+/* a thick dot, and a filled triangle (small: bounding box and edge tests) */
+static void dot(uint16_t *px, float x, float y, int t, uint16_t col)
+{
+    fill(px, (int)(x - t * 0.5f + 0.5f), (int)(y - t * 0.5f + 0.5f), t, t, col);
+}
+static void tri_fill(uint16_t *px, float ax, float ay, float bx, float by, float cx, float cy, uint16_t col)
+{
+    int x0 = (int)fminf(ax, fminf(bx, cx)), x1 = (int)fmaxf(ax, fmaxf(bx, cx)) + 1;
+    int y0 = (int)fminf(ay, fminf(by, cy)), y1 = (int)fmaxf(ay, fmaxf(by, cy)) + 1;
+    float area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if (fabsf(area) < 0.5f)
+        return;
+    for (int y = y0 < 0 ? 0 : y0; y <= y1 && y < H; y++)
+        for (int x = x0 < 0 ? 0 : x0; x <= x1 && x < W; x++) {
+            float px_ = (float)x + 0.5f, py = (float)y + 0.5f;
+            float w0 = (bx - px_) * (cy - py) - (by - py) * (cx - px_);
+            float w1 = (cx - px_) * (ay - py) - (cy - py) * (ax - px_);
+            float w2 = (ax - px_) * (by - py) - (ay - py) * (bx - px_);
+            if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
+                px[y * W + x] = col;
+        }
+}
+
+/* the arrow: up from the bottom, then bending by the corner's angle, an arrow head at the end */
+static void note_arrow(uint16_t *px, int x0, int y0, int sz, const note_t *n, uint16_t col)
+{
+    static const float bend[7] = { 180.f, 110.f, 90.f, 70.f, 55.f, 40.f, 25.f };   /* by grade, 0 = hairpin */
+    float th = bend[n->grade] * RAD, rad = n->grade == 0 ? sz * 0.22f : sz * 0.34f;
+    float x = x0 + sz * 0.5f - (n->grade == 0 ? n->dir * rad : 0), y = (float)(y0 + sz - 2);
+    float stem = n->grade == 0 ? sz * 0.42f : sz * 0.3f;
+    int t = sz / 7 > 3 ? sz / 7 : 3;
+    for (float u = 0; u < stem; u += 1.f)
+        dot(px, x, y - u, t, col);
+    y -= stem;
+    /* the arc: heading up (-y), turning towards dir */
+    float h = 0, steps = th * rad;
+    for (float u = 0; u < steps; u += 1.f) {
+        h = u / rad;
+        dot(px, x + n->dir * (rad - rad * cosf(h)), y - rad * sinf(h), t, col);
+    }
+    h = th;
+    float ex = x + n->dir * (rad - rad * cosf(h)), ey = y - rad * sinf(h);
+    float dx = n->dir * sinf(h), dy = -cosf(h);           /* the direction at the end */
+    float hl = sz * 0.3f, hw = sz * 0.22f;
+    tri_fill(px, ex + dx * hl, ey + dy * hl, ex - dy * hw, ey + dx * hw, ex + dy * hw, ey - dx * hw, col);
+}
+
+static void draw_note(uint16_t *px)
+{
+    int into, j = note_now(&into);
+    if (j < 0)
+        return;
+    const note_t *n = &g_note[j];
+    uint16_t col = n->grade <= 1 ? 0xF904 : n->grade <= 3 ? 0xFD20 : 0xFFE0;
+    int bw = 96, bh = 46, bx = W / 2 - bw / 2, by = 4;
+    if (into >= 0)
+        bx -= 26;
+    shade_box(px, bx, by, bx + bw, by + bh, 3);
+    frame_box(px, bx, by, bw, bh, col);
+    note_arrow(px, bx + 4, by + 5, 36, n, col);
+    char num[4];
+    snprintf(num, sizeof(num), "%d", n->grade);
+    const char *word = n->grade == 0 ? "HAIRPIN" : n->dir > 0 ? "RIGHT" : "LEFT";
+    if (n->grade == 0)
+        text_at(px, bx + 46, by + 8, n->dir > 0 ? "R" : "L", col, 3);
+    else
+        text_at(px, bx + 50, by + 6, num, col, 3);
+    text_at(px, bx + 44, by + 30, word, 0xFFFF, 1);
+    if (n->lng)
+        text_at(px, bx + 70, by + 10, "LONG", 0xFFFF, 1);
+    if (into >= 0) {
+        const note_t *m = &g_note[into];
+        uint16_t c2 = m->grade <= 1 ? 0xF904 : m->grade <= 3 ? 0xFD20 : 0xFFE0;
+        int x2 = bx + bw + 4;
+        shade_box(px, x2, by + 8, x2 + 48, by + bh - 4, 3);
+        frame_box(px, x2, by + 8, 48, bh - 12, c2);
+        text_at(px, x2 + 3, by + 11, "INTO", 0xC618, 1);
+        note_arrow(px, x2 + 2, by + 18, 22, m, c2);
+        if (m->grade == 0)
+            text_at(px, x2 + 27, by + 22, "HP", c2, 1);
+        else {
+            snprintf(num, sizeof(num), "%d", m->grade);
+            text_at(px, x2 + 28, by + 19, num, c2, 2);
+        }
+    }
 }
 
 /* the course from above, top right */
@@ -2230,6 +2521,8 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
     if (s_touch_used && g_state != ST_FINISH)
         draw_touch(px, act);
 
+    if (g_state == ST_RACE && g_notes_on)
+        draw_note(px);
     if (g_state == ST_COUNT) {
         int n = 3 - (int)g_state_t;
         snprintf(line, sizeof(line), "%d", n);
@@ -2288,35 +2581,59 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
 /* ── Meshes ──────────────────────────────────────────────────────────────── */
 static bool make_meshes(void)
 {
-    /* the body: a lower body and a cabin from side profiles, a spoiler, lights */
+    /* the body: a rally hatchback. Lower body and cabin from side profiles; red with a white roof,
+       a white and yellow band along the doors, door number panels, wheel arch flares, a light pod
+       on the nose, a bonnet vent, a roof vent and a big rear wing */
     b_reset();
     {
-        const uint32_t BODY = 0xF2F2F0, LIVERY = 0xE8641C, DARK = 0x262A34, GLASS = 0x1E2C40;
-        static const float low[][2] = { { 2.05f, 0.30f }, { 2.12f, 0.62f }, { 1.30f, 0.86f }, { -1.85f, 0.92f },
-                                        { -2.02f, 0.66f }, { -1.95f, 0.30f } };
-        uint32_t ls[6] = { DARK, LIVERY, BODY, BODY, LIVERY, DARK };
-        b_prism(low, 6, -0.86f, 0.86f, ls, LIVERY);
-        static const float cab[][2] = { { 1.30f, 0.86f }, { 0.35f, 1.36f }, { -1.25f, 1.38f }, { -1.85f, 0.92f } };
-        uint32_t cs[4] = { GLASS, BODY, GLASS, GLASS };
+        const uint32_t BODY = 0xC81E28, WHITE = 0xF2F2F0, YEL = 0xF6BE1C, DARK = 0x1C1E24, GLASS = 0x18263A;
+        static const float low[][2] = { { 2.08f, 0.26f }, { 2.16f, 0.60f }, { 1.30f, 0.86f }, { -1.85f, 0.92f },
+                                        { -2.04f, 0.68f }, { -1.98f, 0.26f } };
+        uint32_t ls[6] = { DARK, BODY, BODY, BODY, DARK, DARK };
+        b_prism(low, 6, -0.86f, 0.86f, ls, BODY);
+        static const float cab[][2] = { { 1.30f, 0.86f }, { 0.30f, 1.36f }, { -1.30f, 1.38f }, { -1.85f, 0.92f } };
+        uint32_t cs[4] = { GLASS, WHITE, GLASS, GLASS };
         b_prism(cab, 4, -0.74f, 0.74f, cs, GLASS);
-        /* side windows: the cabin's caps are glass, a white pillar in the middle */
-        b_box(-0.45f, 0.9f, -0.76f, -0.3f, 1.36f, 0.76f, BODY);
-        /* bonnet stripe and roof scoop */
-        b_box(-0.6f, 1.38f, -0.18f, 0.1f, 1.46f, 0.18f, LIVERY);
-        /* spoiler */
-        b_box(-2.0f, 1.18f, -0.8f, -1.7f, 1.24f, 0.8f, DARK);
-        b_box(-1.9f, 0.92f, -0.6f, -1.85f, 1.2f, -0.5f, DARK);
-        b_box(-1.9f, 0.92f, 0.5f, -1.85f, 1.2f, 0.6f, DARK);
-        /* lights: four spots on the nose, tail lights */
-        for (int i = 0; i < 4; i++) {
-            float z = -0.6f + 0.4f * (float)i;
-            b_box(2.1f, 0.55f, z - 0.11f, 2.2f, 0.75f, z + 0.11f, 0xFFF6C8);
+        /* the pillar between the side windows, and the sills under them */
+        b_box(-0.42f, 0.9f, -0.76f, -0.26f, 1.36f, 0.76f, BODY);
+        /* bands along the doors: white, then a thin yellow one */
+        b_box(-1.30f, 0.34f, -0.88f, 1.10f, 0.48f, 0.88f, WHITE);
+        b_box(-1.30f, 0.48f, -0.88f, 1.10f, 0.53f, 0.88f, YEL);
+        /* door number panels */
+        b_box(-0.50f, 0.58f, -0.875f, 0.20f, 0.84f, 0.875f, WHITE);
+        b_box(-0.30f, 0.64f, -0.88f, -0.24f, 0.78f, 0.88f, DARK);
+        b_box(-0.05f, 0.64f, -0.88f, 0.01f, 0.78f, 0.88f, DARK);
+        /* wheel arch flares */
+        for (int i = 0; i < 2; i++) {
+            float x = i ? -CAR_B : CAR_A + 0.1f;
+            b_box(x - 0.48f, 0.56f, -0.96f, x + 0.48f, 0.70f, -0.84f, BODY);
+            b_box(x - 0.48f, 0.56f, 0.84f, x + 0.48f, 0.70f, 0.96f, BODY);
         }
-        b_box(-2.04f, 0.6f, -0.82f, -1.98f, 0.76f, -0.5f, 0xD01010);
-        b_box(-2.04f, 0.6f, 0.5f, -1.98f, 0.76f, 0.82f, 0xD01010);
+        /* bonnet vent, roof vent (low and dark) */
+        b_box(1.45f, 0.70f, -0.30f, 1.80f, 0.76f, 0.30f, DARK);
+        b_box(0.05f, 1.36f, -0.22f, 0.40f, 1.42f, 0.22f, DARK);
+        /* rear wing: a wide plate on two struts, yellow end plates */
+        b_box(-2.08f, 1.40f, -0.82f, -1.66f, 1.46f, 0.82f, BODY);
+        b_box(-2.10f, 1.30f, -0.86f, -1.64f, 1.52f, -0.82f, YEL);
+        b_box(-2.10f, 1.30f, 0.82f, -1.64f, 1.52f, 0.86f, YEL);
+        b_box(-1.92f, 0.92f, -0.55f, -1.86f, 1.40f, -0.47f, DARK);
+        b_box(-1.92f, 0.92f, 0.47f, -1.86f, 1.40f, 0.55f, DARK);
+        /* light pod on the nose: a dark bar with four lamps */
+        b_box(2.10f, 0.56f, -0.74f, 2.18f, 0.80f, 0.74f, DARK);
+        for (int i = 0; i < 4; i++) {
+            float z = -0.54f + 0.36f * (float)i;
+            b_box(2.18f, 0.60f, z - 0.13f, 2.24f, 0.76f, z + 0.13f, 0xFFF4C0);
+        }
+        /* the rear: a dark panel, bright tail lights, a number plate */
+        b_box(-2.06f, 0.58f, -0.84f, -2.01f, 0.80f, 0.84f, DARK);
+        b_box(-2.08f, 0.61f, -0.80f, -2.04f, 0.77f, -0.48f, 0xFF4A1E);
+        b_box(-2.08f, 0.61f, 0.48f, -2.04f, 0.77f, 0.80f, 0xFF4A1E);
+        b_box(-2.05f, 0.36f, -0.26f, -2.00f, 0.50f, 0.26f, WHITE);
         /* mud flaps */
-        b_box(-1.75f, 0.12f, -0.86f, -1.7f, 0.42f, -0.6f, 0x202020);
-        b_box(-1.75f, 0.12f, 0.6f, -1.7f, 0.42f, 0.86f, 0x202020);
+        b_box(-1.76f, 0.10f, -0.88f, -1.71f, 0.44f, -0.60f, 0x2A2A2E);
+        b_box(-1.76f, 0.10f, 0.60f, -1.71f, 0.44f, 0.88f, 0x2A2A2E);
+        b_box(0.62f, 0.10f, -0.88f, 0.67f, 0.36f, -0.62f, 0x2A2A2E);
+        b_box(0.62f, 0.10f, 0.62f, 0.67f, 0.36f, 0.88f, 0x2A2A2E);
     }
     m_body = b_bake(25.f);
     /* a wheel: a cylinder across z, tread in two shades so it shows turning */
@@ -2423,11 +2740,16 @@ static int menu(const char *title, const char *const *items, int n)
 static bool pause_menu(void)
 {
     /* papp_ui_menu shows 7 items at most; a saved race is loaded by Continue on the title */
-    enum { M_RESUME, M_GHOST, M_SAVE, M_SAVE_EXIT, M_RESTART, M_EXIT };
-    const char *const items[] = { "Resume", g_ghost_on ? "Ghost: on" : "Ghost: off", "Save race", "Save and exit",
+    enum { M_RESUME, M_GHOST, M_EVENING, M_SAVE, M_SAVE_EXIT, M_RESTART, M_EXIT };
+    const char *const items[] = { "Resume", g_ghost_on ? "Ghost: on" : "Ghost: off",
+                                  g_evening ? "Evening: on" : "Evening: off", "Save race", "Save and exit",
                                   "Restart race", "Exit" };
-    int r = menu("Dustline", items, 6);
-    if (r == M_GHOST) {
+    int r = menu("Dustline", items, 7);
+    if (r == M_EVENING) {
+        g_evening = !g_evening;
+        g_look_dirty = true;
+        settings_io(true);
+    } else if (r == M_GHOST) {
         g_ghost_on = !g_ghost_on;
         note(g_ghost_on ? "GHOST ON" : "GHOST OFF");
     } else if (r == M_SAVE || r == M_SAVE_EXIT) {
@@ -2461,11 +2783,16 @@ static void start_menu(void)
 
 int main(int argc, char **argv)
 {
+    settings_io(false);
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "auto"))
             g_auto = true;
         else if (!strcmp(argv[i], "fps"))
             g_show_fps = true;
+        else if (!strcmp(argv[i], "evening"))
+            g_evening = true;
+        else if (!strcmp(argv[i], "nofog"))
+            g_nofog = true;
         else if (!strcmp(argv[i], "rec"))
             g_auto_rec = true;
         else if (!strcmp(argv[i], "icon"))
@@ -2501,17 +2828,15 @@ int main(int argc, char **argv)
     }
     papp_log("dustline: built in %d ms, %d chunks\n", (int)((papp_time_us() - t0) / 1000), g_nchunks);
     make_background();
+    make_notes();
     make_map();
     e3d_set_focal(e, FOCAL);
     e3d_set_background_rows(e, sky_row, NULL);
     e3d_params *par = e3d_params_get(e);
     par->shadows = true;
     par->shadow_y = 0.02f;
-    par->shadow_dark = 0.55f;
-    par->ambient = 0.42f;
-    par->diffuse = 0.80f;
-    par->specular = 0.35f;
     par->shininess = 16.f;
+    apply_look(e);
 
     g_snd_lock = papp_mutex_create(false);
     papp_audio_cfg_t acfg = { .rate = SR, .channels = 1, .format = PAPP_AUDIO_S16, .latency_ms = 60 };
@@ -2548,15 +2873,25 @@ int main(int argc, char **argv)
     int64_t last = papp_time_us(), stat_t = last, log_t = last;
     float fps = 0;
     bool run = true;
+    /* performance per lap: average fps, the worst 1 s, render times (the log line at each lap) */
+    int pf_n = 0, pf_lap = -1;
+    double pf_t = 0, pf_geom = 0, pf_rast = 0;
+    float pf_worst = 999.f;
+    int pf_max = 0;
     while (run && !papp_exit_requested()) {
         int64_t now = papp_time_us();
         float dt = (float)(now - last) * 1e-6f;
+        float dt_raw = dt;
         last = now;
         if (dt > 0.05f)
             dt = 0.05f;
         if (g_msg_t > 0)
             g_msg_t -= dt;
 
+        if (g_look_dirty) {
+            apply_look(e);
+            g_look_dirty = false;
+        }
         actions_t act = read_input(g_surf, dt);
         if (act.pause && g_state != ST_TITLE) {
             run = pause_menu();
@@ -2592,6 +2927,27 @@ int main(int argc, char **argv)
             fps = (float)frames * 1e6f / (float)(now - stat_t);
             frames = 0;
             stat_t = now;
+            if (g_state == ST_RACE && pf_n > 30)
+                pf_worst = fminf(pf_worst, fps);
+        }
+        if (g_state == ST_RACE && pf_lap == g_lap) {
+            const e3d_stats *st = e3d_get_stats(e);
+            pf_n++;
+            pf_t += dt_raw;
+            pf_geom += st->t_geom_us;
+            pf_rast += st->t_raster_us;
+            if (st->t_geom_us + st->t_raster_us > pf_max)
+                pf_max = st->t_geom_us + st->t_raster_us;
+        } else if (pf_lap != g_lap || g_state != ST_RACE) {
+            if (pf_n > 100)
+                papp_log("dustline: perf lap %d%s: %.1f fps average, worst 1 s %.1f, geom %.1f ms + raster %.1f ms average, "
+                         "worst frame %.1f ms\n", pf_lap + 1, g_evening ? " (evening)" : "", pf_n / pf_t, (double)pf_worst,
+                         pf_geom / pf_n / 1000.0, pf_rast / pf_n / 1000.0, pf_max / 1000.0);
+            pf_n = 0;
+            pf_t = pf_geom = pf_rast = 0;
+            pf_worst = 999.f;
+            pf_max = 0;
+            pf_lap = g_state == ST_RACE ? g_lap : -1;
         }
         if (now - log_t >= 5000000) {
             const e3d_stats *st = e3d_get_stats(e);
