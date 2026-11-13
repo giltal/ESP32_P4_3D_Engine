@@ -438,6 +438,7 @@ e3d_params *p = e3d_params_get(e);
 | `shadow_dark` | 0.45 | how much floor colour a shadow keeps: 0 is black, 1 is no shadow |
 | `fog_density` | 0 | 0 is off; fog = exp(-depth * density) |
 | `fog_rgb565` | grey | the colour of the fog |
+| `fog_keep_bg` | false | true: pixels nothing was drawn on (a painted sky from the background row function) keep their colours instead of turning all fog |
 | `clear_rgb565` | black | the background when there is no image and no row function |
 
 Lighting is computed in view space, once per unique corner normal per object, in 16-bit

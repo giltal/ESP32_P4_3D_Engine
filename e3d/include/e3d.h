@@ -149,6 +149,8 @@ typedef struct {
     uint16_t fog_rgb565;
     uint16_t clear_rgb565;        /* when there is no background image */
     bool  shadows;
+    bool  fog_keep_bg;            /* true: pixels nothing was drawn on (a painted sky) keep their
+                                     colours; false (default): they get all fog */
 } e3d_params;
 
 typedef struct e3d e3d_t;

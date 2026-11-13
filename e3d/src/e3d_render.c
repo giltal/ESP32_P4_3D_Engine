@@ -1773,17 +1773,30 @@ static void fog_table(e3d_t *e)
 
 E3D_FAST static void fog_tile(const e3d_t *e, tile_t *tl)
 {
-    uint16_t fc = e->par.fog_rgb565;
-    int fr = fc >> 11, fg = (fc >> 5) & 63, fbl = fc & 31;
+    /* RGB565 spread to 0x07E0F81F (green in the top half) so one multiply blends all three */
+    uint32_t fc = e->par.fog_rgb565;
+    fc = (fc | (fc << 16)) & 0x07E0F81Fu;
+    uint32_t fpart[33];                                 /* the fog's share, by factor */
+    for (int f = 0; f <= 32; f++)
+        fpart[f] = fc * (uint32_t)(32 - f);
     int n = (tl->y1 - tl->y0) * e->w;
+    bool keep = e->par.fog_keep_bg;
+    const uint8_t *fz = e->fog_z;
+    uint16_t *cp = tl->c;
+    const int32_t *zp = tl->z;
     for (int i = 0; i < n; i++) {
-        int32_t z = tl->z[i];
-        int f = z > 0 ? e->fog_z[fog_zi(z)] : 0;      /* background: all fog */
-        uint16_t c = tl->c[i];
-        int r = ((c >> 11) * f + fr * (32 - f)) >> 5;
-        int g = (((c >> 5) & 63) * f + fg * (32 - f)) >> 5;
-        int b = ((c & 31) * f + fbl * (32 - f)) >> 5;
-        tl->c[i] = (uint16_t)((r << 11) | (g << 5) | b);
+        int32_t z = zp[i];
+        int f;
+        if (z > 0)
+            f = fz[fog_zi(z)];
+        else if (keep)
+            continue;                                   /* a painted background fogs itself */
+        else
+            f = 0;                                      /* background: all fog */
+        uint32_t c = cp[i];
+        c = (c | (c << 16)) & 0x07E0F81Fu;
+        c = ((c * (uint32_t)f + fpart[f]) >> 5) & 0x07E0F81Fu;
+        cp[i] = (uint16_t)(c | (c >> 16));
     }
 }
 
