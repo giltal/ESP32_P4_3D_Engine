@@ -16,9 +16,9 @@ def cdef(name):
 P = {k: cdef(k) for k in ["CAR_M", "CAR_I", "CAR_A", "CAR_B", "CAR_CF", "CAR_CR", "CAR_POWER", "CAR_FMAX",
                           "CAR_DRAG", "CAR_BRAKE", "CAR_STEER"]}
 # as in main.c: SAT_* = side force kept past the peak, RG = rear grip, DF = front drive share,
-# RGL = rear grip on the loose surfaces, TC / ABS = least share of grip left to drive / brakes, WT = weight transfer, BB = front brake share
+# SL = lock lost with speed, SR = wheel turn rate in full locks/s (0 = 2.6 rad/s), RGL = rear grip on the loose surfaces, TC / ABS = least share of grip left to drive / brakes, WT = weight transfer, BB = front brake share
 P.update(dict(SAT_F=1.0, SAT_R=1.0, AUTO_MU=0.6, AUTO_K=2.6, AUTO_SLIDE=1.2, HAND=0.45, WT=0.55, BB=0.6, YD=0.0,
-              ABS=0.5, HOR=45, RG=1.15, RGL=1.15, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08))
+              ABS=0.5, HOR=45, RG=1.15, RGL=1.15, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08, SL=0.045, SR=0.0))
 for a in sys.argv[1:]:
     k, v = a.split("=")
     P[k] = float(v)
@@ -91,8 +91,8 @@ def step(c, steer, gas, brake, hand, dt):
     ch, sh = math.cos(c.h), math.sin(c.h)
     vf = c.vx * ch + c.vz * sh; vl = -c.vx * sh + c.vz * ch
     mu = MU[c.surf]; speed = math.hypot(vf, vl)
-    lock = P["CAR_STEER"] / (1 + speed * 0.045)
-    want = steer * lock; rate = 2.6 * dt
+    lock = P["CAR_STEER"] / (1 + speed * P["SL"])
+    want = steer * lock; rate = (P["SR"] * lock if P["SR"] > 0 else 2.6) * dt
     c.steer += clamp(want - c.steer, -rate, rate); d = c.steer
     A, Bb, M = P["CAR_A"], P["CAR_B"], P["CAR_M"]
     nf = M * G * Bb / (A + Bb) - c.ax_s * M * 0.5 / (A + Bb) * P["WT"]
@@ -153,7 +153,7 @@ def auto(c):
     want = math.atan2(dz, dx)
     err = (want - c.h + 3 * math.pi) % (2 * math.pi) - math.pi
     kap = 2 * math.sin(err) / ld
-    lock = P["CAR_STEER"] / (1 + speed * 0.045)
+    lock = P["CAR_STEER"] / (1 + speed * P["SL"])
     delta = math.atan(kap * 2.5) * (1 + speed * 0.01)
     rdes = kap * max(speed, 1)
     delta += P["YAWK"] * (rdes - c.r)

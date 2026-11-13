@@ -913,6 +913,8 @@ static bool build_chunks(void)
 #define CAR_DRAG   0.42f        /* air: N per (m/s)^2 */
 #define CAR_BRAKE  13000.f
 #define CAR_STEER  0.55f        /* full lock, rad */
+#define STEER_SPEED 0.065f      /* lock lost with speed: lock = CAR_STEER / (1 + speed * this) */
+#define STEER_RATE  3.5f        /* the wheels turn at most this many full locks a second */
 #define CAR_R      1.25f        /* collision radius */
 #define GRAV       9.81f
 
@@ -972,9 +974,9 @@ static void car_step(car_t *c, const drive_t *in, float dt)
     float speed = hypotf(vf, vl);
 
     /* steering: less lock at speed, wheels turn at a finite rate */
-    float lock = CAR_STEER / (1.f + speed * 0.045f);
+    float lock = CAR_STEER / (1.f + speed * STEER_SPEED);
     float want = in->steer * lock;
-    float rate = 2.6f * dt;
+    float rate = STEER_RATE * lock * dt;
     c->steer += clampf(want - c->steer, -rate, rate);
     float d = c->steer;
 
@@ -1484,7 +1486,15 @@ static float s_pot_f = -1.f;
 static float s_pot_mid = -1.f;            /* reading at straight ahead */
 static bool s_pot_live;                   /* the roller has been turned */
 static float s_pot_ref;
-#define POT_RANGE 9000.f                  /* counts from the centre to full lock */
+#define POT_RANGE 18000.f                 /* counts from the centre to full lock (about a quarter turn) */
+static float s_pad_steer;                 /* pad left/right and the touch arrows, ramped */
+static float s_touch_dig;                 /* touch arrows held in the last frame: -1, 0, 1 */
+
+/* gentle round the centre, full at the ends: small corrections stay small */
+static float steer_curve(float v)
+{
+    return v * (0.35f + 0.65f * fabsf(v));
+}
 static float g_steer_show;                /* what the steering does, for the HUD */
 static bool g_hand_held;
 
@@ -1518,11 +1528,17 @@ static actions_t read_input(papp_surface_t *surf, float dt)
         a.d.hand = true;
     if (press & PAPP_BTN_Y)
         a.d.reset = true;
-    float pad_steer = 0;
-    if (held & PAPP_BTN_LEFT) pad_steer -= 1.f;
-    if (held & PAPP_BTN_RIGHT) pad_steer += 1.f;
-    if (pad_steer == 0 && (pad.lx > 5000 || pad.lx < -5000))
-        pad_steer = clampf((float)pad.lx / 28000.f, -1.f, 1.f);
+    /* pad left/right ramp in over 0.3 s (back to the centre twice as fast); the stick is analog */
+    float dig = 0;
+    if (held & PAPP_BTN_LEFT) dig -= 1.f;
+    if (held & PAPP_BTN_RIGHT) dig += 1.f;
+    if (dig == 0)
+        dig = s_touch_dig;
+    float ramp = (dig == 0 || dig * s_pad_steer < 0 ? 7.f : 3.5f) * dt;
+    s_pad_steer += clampf(dig - s_pad_steer, -ramp, ramp);
+    float pad_steer = s_pad_steer;
+    if (dig == 0 && (pad.lx > 5000 || pad.lx < -5000))
+        pad_steer = steer_curve(clampf((float)pad.lx / 28000.f, -1.f, 1.f));
 
     /* the roller: absolute, filtered; it takes over once it is turned */
     float pot = 0;
@@ -1550,7 +1566,7 @@ static actions_t read_input(papp_surface_t *surf, float dt)
                 v = -1.f;
             }
             const float dz = 0.04f;
-            pot = fabsf(v) < dz ? 0 : (v - copysignf(dz, v)) / (1.f - dz);
+            pot = fabsf(v) < dz ? 0 : steer_curve((v - copysignf(dz, v)) / (1.f - dz));
         }
     }
     a.d.steer = pad_steer != 0 ? pad_steer : pot;
@@ -1558,6 +1574,7 @@ static actions_t read_input(papp_surface_t *surf, float dt)
     /* touch: arrows bottom left, GAS / BRAKE bottom right, top-right corner pauses */
     papp_touch_point_t tp[3];
     int n = papp_disp_touch(surf, tp, 3);
+    s_touch_dig = 0;
     if (n > 0) {
         s_touch_used = true;
         for (int i = 0; i < n && i < 3; i++) {
@@ -1567,9 +1584,9 @@ static actions_t read_input(papp_surface_t *surf, float dt)
                     a.pause = true;
             } else if (y >= TB_Y - 10 && g_state != ST_TITLE) {
                 if (x < 60)
-                    a.d.steer = -1.f;
+                    s_touch_dig = -1.f;
                 else if (x < 120)
-                    a.d.steer = 1.f;
+                    s_touch_dig = 1.f;
                 else if (x > W - 70)
                     a.d.gas = 1.f;
                 else if (x > W - 140)
@@ -1594,7 +1611,7 @@ static void auto_drive(drive_t *d)
     float ld = fmaxf(hypotf(dx, dz), 4.f);
     float err = fmodf(atan2f(dz, dx) - c->h + 3.f * (float)M_PI, 2.f * (float)M_PI) - (float)M_PI;
     float kap = 2.f * sinf(err) / ld;
-    float lock = CAR_STEER / (1.f + speed * 0.045f);
+    float lock = CAR_STEER / (1.f + speed * STEER_SPEED);
     float delta = atanf(kap * (CAR_A + CAR_B)) * (1.f + speed * 0.01f) + 0.08f * (kap * fmaxf(speed, 1.f) - c->r);
     d->steer = clampf(delta / lock, -1.f, 1.f);
     float vmax = 60.f;

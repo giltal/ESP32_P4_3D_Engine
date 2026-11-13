@@ -394,7 +394,8 @@ woods, three laps, seen from a chase camera.
   course, lap and race times, the best lap, speed, gear and the surface.
 - The engine, tyre noise and gravel rumble are synthesised in the game.
 - Controls: the 4.3" board's roller (paddle) steers; it is centred where it is when a race
-  starts (pause menu: Centre steering). Pad left/right or the stick steer too. A gas, B brake
+  starts (pause menu: Centre steering); a quarter turn is full lock, soft round the centre. Pad
+  left/right (ramped in over 0.3 s) or the stick steer too; the wheels turn slower at speed. A gas, B brake
   and reverse, X handbrake, Y back on the road, START pause. Touch: arrows at the bottom left,
   GAS and BRAKE at the bottom right, the top-right corner pauses.
 - Records: best lap and best race (3 laps) in `/sd/data/dustline/records.txt`. Save race and
