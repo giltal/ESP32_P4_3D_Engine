@@ -16,9 +16,9 @@ def cdef(name):
 P = {k: cdef(k) for k in ["CAR_M", "CAR_I", "CAR_A", "CAR_B", "CAR_CF", "CAR_CR", "CAR_POWER", "CAR_FMAX",
                           "CAR_DRAG", "CAR_BRAKE", "CAR_STEER"]}
 # as in main.c: SAT_* = side force kept past the peak, RG = rear grip, DF = front drive share,
-# SL = lock lost with speed, SR = wheel turn rate in full locks/s (0 = 2.6 rad/s), RGL = rear grip on the loose surfaces, TC / ABS = least share of grip left to drive / brakes, WT = weight transfer, BB = front brake share
+# ESC = stability aid (yaw rate pulled to the steering), SL = lock lost with speed, SR = wheel turn rate in full locks/s (0 = 2.6 rad/s), RGL = rear grip on the loose surfaces, TC / ABS = least share of grip left to drive / brakes, WT = weight transfer, BB = front brake share
 P.update(dict(SAT_F=1.0, SAT_R=1.0, AUTO_MU=0.6, AUTO_K=2.6, AUTO_SLIDE=1.2, HAND=0.45, WT=0.55, BB=0.6, YD=0.0,
-              ABS=0.5, HOR=45, RG=1.15, RGL=1.10, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08, SL=0.065, SR=3.5))
+              ABS=0.5, HOR=45, RG=1.15, RGL=1.10, DF=0.4, TC=0.3, LOOK=0.4, YAWK=0.08, SL=0.065, SR=3.5, ESC=5.0, ESCG=1.1, ESCMAX=4000.0))
 for a in sys.argv[1:]:
     k, v = a.split("=")
     P[k] = float(v)
@@ -130,6 +130,11 @@ def step(c, steer, gas, brake, hand, dt):
     drag = P["CAR_DRAG"] * speed + DRAGS[c.surf]
     fx -= drag * vf; fy -= drag * vl
     tq = A * (fxf * math.sin(d) + fyf * math.cos(d)) - Bb * fyr - P["YD"] * c.r
+    if P["ESC"] > 0 and not hand:
+        # stability aid: pull the yaw rate towards what the front wheels ask, within the grip
+        rk = vf * math.tan(d) / (A + Bb); rg = P["ESCG"] * mu * G / max(speed, 1.0)
+        te = -P["ESC"] * P["CAR_I"] * (c.r - clamp(rk, -rg, rg))
+        tq += clamp(te, -P["ESCMAX"], P["ESCMAX"])
     ax, ay = fx / M, fy / M
     vf += (ax + vl * c.r) * dt; vl += (ay - vf * c.r) * dt
     c.r += tq / P["CAR_I"] * dt

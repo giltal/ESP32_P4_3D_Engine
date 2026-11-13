@@ -1039,6 +1039,13 @@ static void car_step(car_t *c, const drive_t *in, float dt)
     c->pf = fy_f;
     c->pr = fy_r;
     float tq = CAR_A * (fx_f * sinf(d) + fy_f * cosf(d)) - CAR_B * fy_r;
+    /* stability aid: pulls the yaw rate towards what the front wheels ask, within the grip.
+     * Without it a slide on the loose stuff at speed went on for 2-3 s after the wheel was
+     * straight (no grip left at the rear to stop it). Off with the handbrake, for its slides. */
+    if (!in->hand) {
+        float rk = vf * tanf(d) / (CAR_A + CAR_B), rg = 1.1f * mu * GRAV / fmaxf(speed, 1.f);
+        tq += clampf(-5.f * CAR_I * (c->r - clampf(rk, -rg, rg)), -4000.f, 4000.f);
+    }
 
     float ax = fx / CAR_M, ay = fy / CAR_M;
     vf += (ax + vl * c->r) * dt;
