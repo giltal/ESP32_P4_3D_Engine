@@ -1277,7 +1277,13 @@ static float g_lap_times[9];
 static float g_best_lap = 0, g_best_race = 0;   /* records, 0 = none */
 static bool  g_new_lap_rec, g_new_race_rec;
 static float g_wrong_t, g_off_t, g_stuck_t;
-static bool  g_auto, g_icon, g_auto_rec, g_show_fps, g_evening;   /* g_auto_rec: the computer's times count (testing) */
+static bool  g_auto, g_icon, g_auto_rec, g_show_fps, g_evening;
+/* how the player drives: the board's roller + the touch screen; a gamepad (d-pad / left stick
+   steer, R2 / UP gas); or twin sticks (right stick steers, left stick up = gas, down = brake).
+   -1 until chosen: the roller if the board has one, else the gamepad. */
+enum { CTRL_ROLLER, CTRL_PAD, CTRL_TWIN, NCTRL_MODES };
+static const char *const ctrl_name[NCTRL_MODES] = { "Touch + roller", "Gamepad", "Twin stick" };
+static int g_ctrl = -1;   /* g_auto_rec: the computer's times count (testing) */
 static float g_msg_t;
 static const char *g_msg;
 static float g_shake;
@@ -1312,7 +1318,7 @@ static void settings_io(bool save)
         mkdir(DATA_DIR, 0777);
         FILE *f = fopen(SET_PATH, "w");
         if (f) {
-            fprintf(f, "evening=%d\nstage=%d\n", g_evening ? 1 : 0, g_stage);
+            fprintf(f, "evening=%d\nstage=%d\ncontrols=%d\n", g_evening ? 1 : 0, g_stage, g_ctrl);
             fclose(f);
         }
     } else {
@@ -1321,10 +1327,12 @@ static void settings_io(bool save)
             int v;
             if (fscanf(f, "evening=%d ", &v) == 1)
                 g_evening = v != 0;
-            if (fscanf(f, "stage=%d", &v) == 1 && v >= 0 && v < NSTAGES) {
+            if (fscanf(f, "stage=%d ", &v) == 1 && v >= 0 && v < NSTAGES) {
                 g_stage = v;
                 g_st = &k_stage[v];
             }
+            if (fscanf(f, "controls=%d", &v) == 1 && v >= 0 && v < NCTRL_MODES)
+                g_ctrl = v;
             fclose(f);
         }
     }
@@ -1658,7 +1666,7 @@ static void track_progress(int prev, int now)
 #define TB_H    50
 static uint32_t s_prev_btn;
 static int s_touch_n;
-static bool s_touch_used = true;        /* the touch controls show from the start (the gas slider) */
+static bool s_touch_used = true;        /* the touch controls show: from the start with the roller, else after a touch */
 static int s_pot_raw = -1;                /* filtered reading */
 static float s_pot_f = -1.f;
 /* the roller is absolute: 0..65535 maps straight to full left..full right */
@@ -1705,14 +1713,27 @@ static actions_t read_input(papp_surface_t *surf, float dt)
         a.start = true;
     if (press & (PAPP_BTN_START | PAPP_BTN_SELECT))
         a.pause = true;
-    /* gas: the slider on the left of the screen (stays where it is left), the right trigger, or UP */
+    /* gas: the slider on the left of the screen (stays where it is left), the right trigger, or UP;
+       twin sticks: the left stick up. Brake: A / B / L2 (analog when it is), twin: the left stick down */
     float gas = s_gas_lever;
     if (pad.rt > 2000)
         gas = fmaxf(gas, (float)pad.rt / 65535.f);
     else if (held & (PAPP_BTN_R2 | PAPP_BTN_UP))
         gas = 1.f;
-    if (held & (PAPP_BTN_A | PAPP_BTN_B | PAPP_BTN_L2))
+    if (held & (PAPP_BTN_A | PAPP_BTN_B))
         a.d.brake = 1.f;
+    if (pad.lt > 2000)
+        a.d.brake = fmaxf(a.d.brake, (float)pad.lt / 65535.f);
+    else if (held & PAPP_BTN_L2)
+        a.d.brake = 1.f;
+    if (g_ctrl == CTRL_TWIN) {
+        const float dz = 0.15f;
+        float v = clampf(-(float)pad.ly / 30000.f, -1.f, 1.f);   /* +y is down */
+        if (v > dz)
+            gas = fmaxf(gas, (v - dz) / (1.f - dz));
+        else if (v < -dz)
+            a.d.brake = fmaxf(a.d.brake, (-v - dz) / (1.f - dz));
+    }
     if (held & PAPP_BTN_DOWN)
         a.d.rev = 1.f;
     if (held & (PAPP_BTN_X | PAPP_BTN_R1 | PAPP_BTN_L1))
@@ -1728,12 +1749,13 @@ static actions_t read_input(papp_surface_t *surf, float dt)
     float ramp = (dig == 0 || dig * s_pad_steer < 0 ? 7.f : 3.5f) * dt;
     s_pad_steer += clampf(dig - s_pad_steer, -ramp, ramp);
     float pad_steer = s_pad_steer;
-    if (dig == 0 && (pad.lx > 5000 || pad.lx < -5000))
-        pad_steer = steer_curve(clampf((float)pad.lx / 28000.f, -1.f, 1.f));
+    int sx = g_ctrl == CTRL_TWIN ? pad.rx : pad.lx;          /* twin sticks: the right one steers */
+    if (dig == 0 && (sx > 5000 || sx < -5000))
+        pad_steer = steer_curve(clampf((float)sx / 28000.f, -1.f, 1.f));
 
     /* the roller: absolute (its position is the steering), lightly filtered, a small dead zone */
     float pot = 0;
-    int pv = papp_input_analog(PAPP_ANALOG_PADDLE);
+    int pv = g_ctrl == CTRL_ROLLER ? papp_input_analog(PAPP_ANALOG_PADDLE) : -1;
     if (pv >= 0) {
         if (s_pot_f < 0)
             s_pot_f = (float)pv;
@@ -2613,8 +2635,16 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         text_c(px, 106, line, 0xFFFF, 1);
         if (((int)(g_t * 2.f)) & 1)
             text_c(px, 116, "PRESS A OR TAP TO RACE", 0xFFFF, 1);
-        text_c(px, 134, "ROLLER STEERS   GAS SLIDER OR R2   A BRAKE   DOWN REVERSE", 0xA534, 1);
-        text_c(px, 144, "X HANDBRAKE   Y BACK ON THE ROAD   START PAUSE", 0xA534, 1);
+        if (g_ctrl == CTRL_TWIN) {
+            text_c(px, 134, "RIGHT STICK STEERS   LEFT STICK UP GAS   DOWN BRAKE", 0xA534, 1);
+            text_c(px, 144, "A BRAKE  X HANDBRAKE  Y BACK ON ROAD  D-PAD DOWN REVERSE", 0xA534, 1);
+        } else if (g_ctrl == CTRL_PAD) {
+            text_c(px, 134, "LEFT/RIGHT OR STICK STEERS   R2 OR UP GAS   A BRAKE", 0xA534, 1);
+            text_c(px, 144, "X HANDBRAKE  Y BACK ON ROAD  DOWN REVERSE  START PAUSE", 0xA534, 1);
+        } else {
+            text_c(px, 134, "ROLLER STEERS   GAS SLIDER OR R2   A BRAKE   DOWN REVERSE", 0xA534, 1);
+            text_c(px, 144, "X HANDBRAKE   Y BACK ON THE ROAD   START PAUSE", 0xA534, 1);
+        }
         fmt_time(t1, sizeof(t1), g_best_lap);
         fmt_time(t2, sizeof(t2), g_best_race);
         snprintf(line, sizeof(line), "BEST LAP %s   BEST RACE %s", t1, t2);
@@ -2670,7 +2700,7 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         snprintf(line, sizeof(line), "%d", n);
         text_c(px, 70, line, 0xFFE0, 6);
         if (g_lap == 0 && g_race_t == 0)
-            text_c(px, 120, "HOLD THE ROLLER STRAIGHT", 0xFFFF, 1);
+            text_c(px, 120, g_ctrl == CTRL_ROLLER ? "HOLD THE ROLLER STRAIGHT" : "GET READY", 0xFFFF, 1);
         else {
             snprintf(line, sizeof(line), "LAP %d", g_lap + 1);
             text_c(px, 120, line, 0xFFFF, 2);
@@ -2974,7 +3004,9 @@ static void start_menu(void)
     char cont[32], stg[40];
     snprintf(cont, sizeof(cont), "Continue (lap %d)", g_save_lap + 1);
     snprintf(stg, sizeof(stg), "Stage: %s", g_st->name);
-    const char *items[3];
+    char ctl[40];
+    snprintf(ctl, sizeof(ctl), "Controls: %s", ctrl_name[g_ctrl]);
+    const char *items[4];
     int n = 0, i_cont = -1;
     if (g_save_lap >= 0) {
         i_cont = n;
@@ -2984,6 +3016,8 @@ static void start_menu(void)
     items[n++] = g_save_lap >= 0 ? "New race" : "Start race";
     int i_stage = n;
     items[n++] = stg;
+    int i_ctl = n;
+    items[n++] = ctl;
     int r = menu("Dustline", items, n);
     if (r == i_cont) {
         if (!load_race()) {
@@ -3003,6 +3037,13 @@ static void start_menu(void)
                 if (c != 0)
                     stage_switch(0);
             }
+            settings_io(true);
+        }
+    } else if (r == i_ctl) {
+        int c = menu("Controls", ctrl_name, NCTRL_MODES);
+        if (c >= 0 && c < NCTRL_MODES && c != g_ctrl) {
+            g_ctrl = c;
+            s_touch_used = c == CTRL_ROLLER;     /* the touch controls show again on a touch */
             settings_io(true);
         }
     }
@@ -3036,6 +3077,9 @@ int main(int argc, char **argv)
             g_laps = (int)clampf((float)atoi(argv[++i]), 1, 9);
     }
     srand((unsigned)papp_time_us());
+    if (g_ctrl < 0)
+        g_ctrl = papp_input_analog(PAPP_ANALOG_PADDLE) >= 0 ? CTRL_ROLLER : CTRL_PAD;
+    s_touch_used = g_ctrl == CTRL_ROLLER;
 
     papp_surface_cfg_t cfg = { .width = W, .height = H, .format = PAPP_PIXFMT_RGB565,
                                .scale = PAPP_SCALE_FIT_ASPECT, .buffers = 1 };

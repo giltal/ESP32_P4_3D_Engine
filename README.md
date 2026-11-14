@@ -413,13 +413,19 @@ SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
   through them). Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
   course, lap and race times, the best lap, speed, gear and the surface.
 - The engine, tyre noise and gravel rumble are synthesised in the game.
-- Controls: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
-  straight ahead, its ends are full lock. Pad
-  left/right (ramped in over 0.3 s) or the stick steer too; the wheels turn slower at speed.
-  Gas: the slider on the left of the screen (70 of the 240 rows, centred), a lever that stays where your finger leaves it
-  (it goes back to zero at each start), or R2 (analog) / UP. A or B brakes and takes the gas off
-  while held; DOWN reverses (up to 25 km/h). X handbrake, Y back on the road, START pause.
-  Touch: steering arrows and BRAKE at the bottom right, REV above BRAKE, the top-right corner pauses.
+- Controls: three methods, picked on the title (Controls: in its menu; remembered in
+  `settings.txt`). The first time, Touch + roller on a board with a roller (the 4.3"), else Gamepad.
+  - Touch + roller: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
+    straight ahead, its ends are full lock. Gas: the slider on the left of the screen (70 of the
+    240 rows, centred), a lever that stays where your finger leaves it (it goes back to zero at
+    each start). Steering arrows and BRAKE at the bottom right, REV above BRAKE.
+  - Gamepad: d-pad left/right (ramped in over 0.3 s) or the left stick steer; R2 (analog) or UP gas.
+  - Twin stick, for analog pads: the right stick steers, the left stick pushed up is the gas and
+    pulled down the brake, both in proportion (15% dead zone).
+  In every method: A or B brakes and takes the gas off while held, L2 brakes (analog), DOWN
+  reverses (up to 25 km/h), X handbrake, Y back on the road, START or the top-right corner
+  pauses. The wheels turn slower at speed. In the pad methods the roller is not read and the
+  touch controls show once you touch the screen.
 - Records: best lap and best race (3 laps) in `/sd/data/dustline/records.txt`. Save race and
   Save and exit in the pause menu (`/sd/data/dustline/save.txt`); Continue on the title loads it.
 - Pace notes: the corners are found from the course's curvature and graded like a co-driver's
