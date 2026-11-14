@@ -2663,7 +2663,7 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         if (((int)(g_t * 2.f)) & 1)
             text_c(px, 116, "PRESS A OR TAP TO RACE", 0xFFFF, 1);
         if (g_ctrl == CTRL_TWIN) {
-            text_c(px, 134, "RIGHT STICK STEERS  LEFT STICK UP GAS  DOWN BRAKE  FULL DOWN REV", 0xA534, 1);
+            text_c(px, 134, "R STICK STEERS   L STICK UP GAS   DOWN BRAKE   FULL DOWN REV", 0xA534, 1);
             text_c(px, 144, "A OR L2 BRAKE   X HANDBRAKE   Y BACK ON ROAD   START PAUSE", 0xA534, 1);
         } else if (g_ctrl == CTRL_PAD) {
             text_c(px, 134, "LEFT/RIGHT OR STICK STEERS   R2 OR UP GAS   A BRAKE", 0xA534, 1);
