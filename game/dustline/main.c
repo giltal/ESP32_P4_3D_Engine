@@ -1721,7 +1721,8 @@ static actions_t read_input(papp_surface_t *surf, float dt)
     if (press & (PAPP_BTN_START | PAPP_BTN_SELECT))
         a.pause = true;
     /* gas: the slider on the left of the screen (stays where it is left), the right trigger, or UP;
-       twin sticks: the left stick up from the centre (pulled all the way down = reverse).
+       twin sticks: the left stick up from the centre; down past 10% brakes, more the further
+       (full brake at 85%), all the way down = reverse.
        Brake: A / B / L2 (analog when it is) */
     float gas = s_gas_lever;
     if (pad.rt > 2000)
@@ -1741,6 +1742,8 @@ static actions_t read_input(papp_surface_t *surf, float dt)
             gas = fmaxf(gas, (v - dz) / (1.f - dz));
         else if (v < -0.85f)
             a.d.rev = 1.f;
+        else if (v < -0.10f)
+            a.d.brake = fmaxf(a.d.brake, (-v - 0.10f) / 0.75f);
     }
     if (held & PAPP_BTN_DOWN)
         a.d.rev = 1.f;
@@ -2632,18 +2635,19 @@ static void draw_touch(uint16_t *px, const actions_t *a)
 }
 
 /* twin sticks: the gas the left stick gives, where the touch slider would be (display only) */
-static void draw_gas_meter(uint16_t *px, bool rev)
+static void draw_gas_meter(uint16_t *px, float brake, bool rev)
 {
     int h = GS_Y1 - GS_Y0;
     shade_box(px, GS_X, GS_Y0, GS_X + GS_W, GS_Y1, 5);
-    int fh = (int)(g_gas_show * (float)(h - 16)) + 8;
-    if (g_gas_show > 0)
-        fill(px, GS_X + 2, GS_Y1 - fh, GS_W - 4, fh - 1, 0x2C64);
-    frame_box(px, GS_X, GS_Y0, GS_W, h, rev ? 0xF800 : 0x8410);
+    float lv = brake > 0 ? brake : g_gas_show;   /* braking: a red bar */
+    int fh = (int)(lv * (float)(h - 16)) + 8;
+    if (lv > 0)
+        fill(px, GS_X + 2, GS_Y1 - fh, GS_W - 4, fh - 1, brake > 0 ? 0xA000 : 0x2C64);
+    frame_box(px, GS_X, GS_Y0, GS_W, h, rev || brake > 0 ? 0xF800 : 0x8410);
     for (int q = 1; q < 4; q++)
         fill(px, GS_X + 1, GS_Y1 - 8 - q * (h - 16) / 4, 6, 1, 0x8410);
-    const char *t = rev ? "REV" : "GAS";
-    text_at(px, GS_X + (GS_W - text_w(t, 1)) / 2, GS_Y0 + 4, t, rev ? 0xF800 : 0xE71C, 1);
+    const char *t = rev ? "REV" : brake > 0 ? "BRAKE" : "GAS";
+    text_at(px, GS_X + (GS_W - text_w(t, 1)) / 2, GS_Y0 + 4, t, rev || brake > 0 ? 0xF800 : 0xE71C, 1);
 }
 
 static void draw_hud(uint16_t *px, const actions_t *act, float fps)
@@ -2659,7 +2663,7 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         if (((int)(g_t * 2.f)) & 1)
             text_c(px, 116, "PRESS A OR TAP TO RACE", 0xFFFF, 1);
         if (g_ctrl == CTRL_TWIN) {
-            text_c(px, 134, "RIGHT STICK STEERS   LEFT STICK UP GAS   FULL DOWN REV", 0xA534, 1);
+            text_c(px, 134, "RIGHT STICK STEERS  LEFT STICK UP GAS  DOWN BRAKE  FULL DOWN REV", 0xA534, 1);
             text_c(px, 144, "A OR L2 BRAKE   X HANDBRAKE   Y BACK ON ROAD   START PAUSE", 0xA534, 1);
         } else if (g_ctrl == CTRL_PAD) {
             text_c(px, 134, "LEFT/RIGHT OR STICK STEERS   R2 OR UP GAS   A BRAKE", 0xA534, 1);
@@ -2716,7 +2720,7 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
     if (s_touch_used && g_state != ST_FINISH)
         draw_touch(px, act);
     else if (g_ctrl == CTRL_TWIN && (g_state == ST_RACE || g_state == ST_COUNT))
-        draw_gas_meter(px, act->d.rev > 0);
+        draw_gas_meter(px, act->d.brake, act->d.rev > 0);
 
     if (g_state == ST_RACE && g_notes_on)
         draw_note(px);
