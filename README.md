@@ -416,7 +416,7 @@ SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
 - Controls: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
   straight ahead, its ends are full lock. Pad
   left/right (ramped in over 0.3 s) or the stick steer too; the wheels turn slower at speed.
-  Gas: the slider on the left of the screen (half its height, centred), a lever that stays where your finger leaves it
+  Gas: the slider on the left of the screen (70 of the 240 rows, centred), a lever that stays where your finger leaves it
   (it goes back to zero at each start), or R2 (analog) / UP. A or B brakes and takes the gas off
   while held; DOWN reverses (up to 25 km/h). X handbrake, Y back on the road, START pause.
   Touch: steering arrows and BRAKE at the bottom right, REV above BRAKE, the top-right corner pauses.

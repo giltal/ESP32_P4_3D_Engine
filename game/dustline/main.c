@@ -1669,8 +1669,8 @@ static float s_touch_dig;                 /* touch arrows held in the last frame
 /* the gas slider, left edge: a lever that stays where the finger leaves it */
 #define GS_X    4
 #define GS_W    44
-#define GS_Y0   (H / 2 - 47)              /* top = full gas; half the screen height, centred */
-#define GS_Y1   (H / 2 + 47)              /* bottom = no gas */
+#define GS_Y0   (H / 2 - 35)              /* top = full gas; 70 px tall, centred */
+#define GS_Y1   (H / 2 + 35)              /* bottom = no gas */
 #define TBR_X   (W - 166)                 /* touch buttons, bottom right: < > BRAKE */
 #define REV_Y   (TB_Y - 46)               /* REV, above BRAKE */
 static float g_gas_show;                  /* the gas the car gets, for the slider */
