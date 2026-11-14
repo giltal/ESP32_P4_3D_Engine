@@ -420,8 +420,11 @@ SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
     240 rows, centred), a lever that stays where your finger leaves it (it goes back to zero at
     each start). Steering arrows and BRAKE at the bottom right, REV above BRAKE.
   - Gamepad: d-pad left/right (ramped in over 0.3 s) or the left stick steer; R2 (analog) or UP gas.
-  - Twin stick, for analog pads: the right stick steers, the left stick pushed up is the gas and
-    pulled down the brake, both in proportion (15% dead zone).
+  - Twin stick, for analog pads: the right stick steers, the left stick from the centre up is the
+    gas, in proportion (15% dead zone); pulled all the way down it reverses. A gas meter on the
+    left shows the gas (red REV when reversing).
+  The sticks steer through a 12% dead zone and a curve that is very gentle round the centre
+  (half way out is about a fifth of the lock).
   In every method: A or B brakes and takes the gas off while held, L2 brakes (analog), DOWN
   reverses (up to 25 km/h), X handbrake, Y back on the road, START or the top-right corner
   pauses. The wheels turn slower at speed. In the pad methods the roller is not read and the
