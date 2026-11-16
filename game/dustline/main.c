@@ -41,6 +41,11 @@ PAPP_MANIFEST(.id = "giltal.dustline", .name = "Dustline", .version = PAPP_APP_V
 
 #define W 400
 #define H 240
+/* the 3D view is 320x240 in the middle of the 400x240 surface: 20% fewer pixels to draw. The two
+   40-column bars beside it hold the gas (left) and brake / reverse (right) */
+#define VX 40                             /* the view's first column */
+#define VW 320
+#define VR (VX + VW)                      /* the right bar's first column */
 #define DEG (180.f / (float)M_PI)
 #define RAD ((float)M_PI / 180.f)
 
@@ -298,6 +303,52 @@ static void b_prism(const float (*p)[2], int n, float z0, float z1, const uint32
         b_tri(base, base + 2 * i, base + 2 * (i + 1), cap_rgb, c);
         b_tri(base + 1, base + 2 * i + 1, base + 2 * (i + 1) + 1, cap_rgb, c);
     }
+}
+
+/* a loft along x: ns stations, each a convex cross-section of k (z, y) points, joined by quads
+   coloured per segment and edge (rgb[s * k + j], 0 = no face); cap0 / cap1 close the ends (0 = open) */
+static void b_loft(const float *xs, int ns, const float (*sec)[2], int k, const uint32_t *rgb, uint32_t cap0,
+                   uint32_t cap1)
+{
+    int base = B.nv;
+    for (int st = 0; st < ns; st++)
+        for (int j = 0; j < k; j++)
+            b_v(xs[st], sec[st * k + j][1], sec[st * k + j][0]);
+    for (int st = 0; st + 1 < ns; st++) {
+        float cy = 0;
+        for (int j = 0; j < k; j++)
+            cy += sec[st * k + j][1] + sec[(st + 1) * k + j][1];
+        float c[3] = { (xs[st] + xs[st + 1]) * 0.5f, cy / (float)(2 * k), 0 };
+        for (int j = 0; j < k; j++) {
+            uint32_t col = rgb[st * k + j];
+            if (!col)
+                continue;
+            int j1 = (j + 1) % k;
+            b_quad(base + st * k + j, base + st * k + j1, base + (st + 1) * k + j1, base + (st + 1) * k + j, col, c);
+        }
+    }
+    for (int e = 0; e < 2; e++) {
+        uint32_t col = e ? cap1 : cap0;
+        if (!col)
+            continue;
+        int st = e ? ns - 1 : 0, o = base + st * k;
+        float cy = 0;
+        for (int j = 0; j < k; j++)
+            cy += sec[st * k + j][1];
+        float c[3] = { xs[st] + (e ? 1.f : -1.f), cy / (float)k, 0 };
+        for (int j = 1; j + 1 < k; j++)
+            b_tri(o, o + j, o + j + 1, col, c);
+    }
+}
+
+/* the car's lower body section at one station: flat bottom, a skirt, upright sides, chamfered
+   shoulders, the top; yb / yt bottom and top, hw the half width */
+static void car_sec(float (*q)[2], float yb, float yt, float hw)
+{
+    float hb = hw - 0.08f, ch = fminf(0.12f, (yt - yb) * 0.3f);
+    const float pts[8][2] = { { -hb, yb }, { hb, yb }, { hw, yb + 0.10f }, { hw, yt - ch },
+                              { hw - ch, yt }, { -(hw - ch), yt }, { -hw, yt - ch }, { -hw, yb + 0.10f } };
+    memcpy(q, pts, sizeof(pts));
 }
 
 static e3d_mat mat_at(float x, float y, float z, float rx, float ry, float rz, float s)
@@ -1662,7 +1713,7 @@ static void track_progress(int prev, int now)
 }
 
 /* ── Input ───────────────────────────────────────────────────────────────── */
-#define TB_Y    186
+#define TB_Y    186                       /* the steering arrows, bottom right of the view */
 #define TB_H    50
 static uint32_t s_prev_btn;
 static int s_touch_n;
@@ -1675,13 +1726,16 @@ static float s_pot_f = -1.f;
 static float s_pad_steer;                 /* pad left/right and the touch arrows, ramped */
 static float s_touch_dig;                 /* touch arrows held in the last frame: -1, 0, 1 */
 /* the gas slider, left edge: a lever that stays where the finger leaves it */
-#define GS_X    4
-#define GS_W    44
+#define GS_X    2                         /* in the left bar */
+#define GS_W    36
 #define GS_Y0   (H / 2 - 35)              /* top = full gas; 70 px tall, centred */
 #define GS_Y1   (H / 2 + 35)              /* bottom = no gas */
-#define TBR_X   (W - 166)                 /* touch buttons, bottom right: < > BRAKE */
-#define REV_Y   (TB_Y - 46)               /* REV, above BRAKE */
-static float g_gas_show;                  /* the gas the car gets, for the slider */
+#define TBR_X   (VR - 104)                /* touch arrows: < > */
+#define BRK_Y   166                       /* BRAKE in the right bar, at the bottom */
+#define REV_Y   116                       /* REV above it */
+#define REV_H   44
+static float g_gas_show, g_brake_show;    /* the gas and brake the car gets, for the HUD */
+static bool g_rev_show;
 
 static float slider_gas(int y)
 {
@@ -1778,8 +1832,8 @@ static actions_t read_input(papp_surface_t *surf, float dt)
     }
     a.d.steer = pad_steer != 0 ? pad_steer : pot;
 
-    /* touch: the gas slider on the left, steering arrows + BRAKE bottom right, REV above BRAKE,
-       the top-right corner pauses */
+    /* touch: the gas slider in the left bar, steering arrows bottom right of the view, BRAKE and
+       REV in the right bar, the top-right corner pauses */
     papp_touch_point_t tp[3];
     int n = papp_disp_touch(surf, tp, 3);
     s_touch_dig = 0;
@@ -1795,15 +1849,12 @@ static actions_t read_input(papp_surface_t *surf, float dt)
                     a.tap = true;
             } else if (x < GS_X + GS_W + 14 && y >= GS_Y0 - 14 && y <= GS_Y1 + 14) {
                 s_gas_lever = gas = slider_gas(y);
-            } else if (x >= TBR_X && y >= TB_Y - 10) {
-                if (x >= W - 62)
-                    a.d.brake = 1.f;
-                else if (x >= W - 114)
-                    s_touch_dig = 1.f;
-                else
-                    s_touch_dig = -1.f;
-            } else if (x >= W - 62 && y >= REV_Y - 6 && y < TB_Y - 10) {
+            } else if (x >= VR - 6 && y >= BRK_Y - 4) {
+                a.d.brake = 1.f;
+            } else if (x >= VR - 6 && y >= REV_Y - 6 && y < BRK_Y - 4) {
                 a.d.rev = 1.f;
+            } else if (x >= TBR_X && x < VR - 6 && y >= TB_Y - 10) {
+                s_touch_dig = x >= VR - 54 ? 1.f : -1.f;
             } else if (s_touch_n == 0)
                 a.tap = true;
         }
@@ -1903,6 +1954,8 @@ static void update(const actions_t *act, float dt)
     }
     g_hand_held = in.hand;
     g_gas_show = in.gas;
+    g_brake_show = in.brake;
+    g_rev_show = in.rev > 0;
     if (g_state == ST_COUNT && g_state_t >= 3.f) {
         g_state = ST_RACE;
         g_state_t = 0;
@@ -2060,7 +2113,7 @@ static e3d_mesh *m_body, *m_wheel, *m_dust, *m_ghost;
 /* the background: sky, hills on the horizon (by heading), grass below */
 #define HILLS 1024
 static uint8_t  s_far[HILLS], s_near[HILLS];
-static uint16_t s_col[W];                 /* hill index of each column, set before each frame */
+static uint16_t s_col[VW];                 /* hill index of each column, set before each frame */
 static uint16_t s_sky[H], s_grass[H], s_far_c[H], s_near_c[H];
 static uint8_t  s_cl_lo[HILLS], s_cl_hi[HILLS];   /* clouds: rows above the horizon each column covers (lo > hi = none) */
 static uint16_t s_cl_lit[H], s_cl_dark[H];
@@ -2174,8 +2227,8 @@ static void make_background(void)
 
 static void bg_columns(float heading_deg)
 {
-    for (int x = 0; x < W; x++) {
-        float a = heading_deg + atanf(((float)x + 0.5f - W * 0.5f) / FOCAL) * DEG;
+    for (int x = 0; x < VW; x++) {
+        float a = heading_deg + atanf(((float)x + 0.5f - VW * 0.5f) / FOCAL) * DEG;
         int i = (int)(a * (HILLS / 360.f)) % HILLS;
         if (i < 0)
             i += HILLS;
@@ -2324,23 +2377,72 @@ static void text_r(uint16_t *px, int xr, int y, const char *s, uint16_t col, int
     text_at(px, xr - text_w(s, scale), y, s, col, scale);
 }
 
+/* the HUD draws straight into the frame in PSRAM: clip once per box, then two pixels per
+   32-bit access (W is even and the frame 64-byte aligned, so an even x is word aligned) */
+typedef uint32_t u32_alias __attribute__((may_alias));
 static void fill(uint16_t *px, int x, int y, int w, int h, uint16_t col)
 {
-    for (int j = y; j < y + h; j++)
-        for (int i = x; i < x + w; i++)
-            if (i >= 0 && i < W && j >= 0 && j < H)
-                px[j * W + i] = col;
+    int x1 = x + w, y1 = y + h;
+    if (x < 0)
+        x = 0;
+    if (y < 0)
+        y = 0;
+    if (x1 > W)
+        x1 = W;
+    if (y1 > H)
+        y1 = H;
+    uint32_t c2 = col | (uint32_t)col << 16;
+    for (int j = y; j < y1; j++) {
+        uint16_t *r = px + j * W;
+        int i = x;
+        if ((i & 1) && i < x1)
+            r[i++] = col;
+        for (; i + 1 < x1; i += 2)
+            *(u32_alias *)(r + i) = c2;
+        if (i < x1)
+            r[i] = col;
+    }
+}
+
+/* keep/8 of each channel, two RGB565 pixels at once: a sum of halves, quarters and eighths
+   (the masks drop the bits that a shift carries into the next channel or pixel) */
+static inline uint32_t shade2(uint32_t v, int keep)
+{
+    uint32_t o = 0;
+    if (keep & 4)
+        o += (v >> 1) & 0x7BEF7BEFu;
+    if (keep & 2)
+        o += (v >> 2) & 0x39E739E7u;
+    if (keep & 1)
+        o += (v >> 3) & 0x18E318E3u;
+    return o;
 }
 
 static void shade_box(uint16_t *px, int x0, int y0, int x1, int y1, int keep)
 {
-    for (int y = y0 < 0 ? 0 : y0; y < y1 && y < H; y++) {
+    if (keep >= 8)
+        return;
+    if (x0 < 0)
+        x0 = 0;
+    if (y0 < 0)
+        y0 = 0;
+    if (x1 > W)
+        x1 = W;
+    if (y1 > H)
+        y1 = H;
+    for (int y = y0; y < y1; y++) {
         uint16_t *r = px + y * W;
-        for (int x = x0 < 0 ? 0 : x0; x < x1 && x < W; x++) {
-            uint16_t c = r[x];
-            int rr = (c >> 11) * keep / 8, gg = ((c >> 5) & 63) * keep / 8, bb = (c & 31) * keep / 8;
-            r[x] = (uint16_t)((rr << 11) | (gg << 5) | bb);
+        int x = x0;
+        if ((x & 1) && x < x1) {
+            r[x] = (uint16_t)shade2(r[x], keep);
+            x++;
         }
+        for (; x + 1 < x1; x += 2) {
+            u32_alias *p = (u32_alias *)(r + x);
+            *p = shade2(*p, keep);
+        }
+        if (x < x1)
+            r[x] = (uint16_t)shade2(r[x], keep);
     }
 }
 
@@ -2527,7 +2629,7 @@ static void draw_note(uint16_t *px)
     uint16_t col = n->grade <= 1 ? 0xF904 : n->grade <= 3 ? 0xFD20 : 0xFFE0;
     int bw = 96, bh = 46, bx = W / 2 - bw / 2, by = 4;
     if (into >= 0)
-        bx -= 26;
+        bx -= 18;
     shade_box(px, bx, by, bx + bw, by + bh, 3);
     frame_box(px, bx, by, bw, bh, col);
     note_arrow(px, bx + 4, by + 5, 36, n, col);
@@ -2604,8 +2706,8 @@ static void draw_map(uint16_t *px, int x0, int y0)
 static void draw_touch(uint16_t *px, const actions_t *a)
 {
     struct { int x, y, w, h; const char *s; bool on; } b[4] = {
-        { TBR_X, TB_Y, 48, TB_H, "<", s_touch_dig < 0 }, { W - 114, TB_Y, 48, TB_H, ">", s_touch_dig > 0 },
-        { W - 62, TB_Y, 58, TB_H, "BRAKE", a->d.brake > 0 }, { W - 62, REV_Y, 58, 36, "REV", a->d.rev > 0 } };
+        { TBR_X, TB_Y, 48, TB_H, "<", s_touch_dig < 0 }, { VR - 52, TB_Y, 48, TB_H, ">", s_touch_dig > 0 },
+        { VR + 2, BRK_Y, 36, H - 4 - BRK_Y, "BRAKE", a->d.brake > 0 }, { VR + 2, REV_Y, 36, REV_H, "REV", a->d.rev > 0 } };
     for (int i = 0; i < 4; i++) {
         shade_box(px, b[i].x, b[i].y, b[i].x + b[i].w, b[i].y + b[i].h, b[i].on ? 8 : 5);
         frame_box(px, b[i].x, b[i].y, b[i].w, b[i].h, b[i].on ? 0xFE60 : 0x8410);
@@ -2634,20 +2736,39 @@ static void draw_touch(uint16_t *px, const actions_t *a)
     text_at(px, GS_X + (GS_W - text_w("GAS", 1)) / 2, GS_Y0 + 4, "GAS", 0xE71C, 1);
 }
 
-/* twin sticks: the gas the left stick gives, where the touch slider would be (display only) */
-static void draw_gas_meter(uint16_t *px, float brake, bool rev)
+/* the pad methods: the gas in the left bar, the brake and reverse in the right one (display only) */
+#define MT_Y0 (H / 2 - 66)
+#define MT_Y1 (H / 2 + 54)
+static void meter(uint16_t *px, int x, float v, uint16_t bar, const char *label, uint16_t lcol)
 {
-    int h = GS_Y1 - GS_Y0;
-    shade_box(px, GS_X, GS_Y0, GS_X + GS_W, GS_Y1, 5);
-    float lv = brake > 0 ? brake : g_gas_show;   /* braking: a red bar */
-    int fh = (int)(lv * (float)(h - 16)) + 8;
-    if (lv > 0)
-        fill(px, GS_X + 2, GS_Y1 - fh, GS_W - 4, fh - 1, brake > 0 ? 0xA000 : 0x2C64);
-    frame_box(px, GS_X, GS_Y0, GS_W, h, rev || brake > 0 ? 0xF800 : 0x8410);
+    int h = MT_Y1 - MT_Y0;
+    shade_box(px, x, MT_Y0, x + 36, MT_Y1, 5);
+    int fh = (int)(clampf(v, 0.f, 1.f) * (float)(h - 4));
+    if (fh > 0)
+        fill(px, x + 2, MT_Y1 - 2 - fh, 32, fh, bar);
+    frame_box(px, x, MT_Y0, 36, h, v > 0 ? lcol : 0x8410);
     for (int q = 1; q < 4; q++)
-        fill(px, GS_X + 1, GS_Y1 - 8 - q * (h - 16) / 4, 6, 1, 0x8410);
-    const char *t = rev ? "REV" : brake > 0 ? "BRAKE" : "GAS";
-    text_at(px, GS_X + (GS_W - text_w(t, 1)) / 2, GS_Y0 + 4, t, rev || brake > 0 ? 0xF800 : 0xE71C, 1);
+        fill(px, x + 1, MT_Y1 - 2 - q * (h - 4) / 4, 5, 1, 0x8410);
+    text_at(px, x + (36 - text_w(label, 1)) / 2, MT_Y0 - 11, label, v > 0 ? lcol : 0xBDF7, 1);
+}
+
+static void draw_meters(uint16_t *px, float brake, bool rev)
+{
+    meter(px, GS_X, g_gas_show, 0x2C64, "GAS", 0x07E0);
+    meter(px, VR + 2, brake, 0xA000, "BRAKE", 0xF800);
+    int y = MT_Y1 + 6;
+    fill(px, VR + 2, y, 36, 20, rev ? 0x6000 : 0x0841);
+    frame_box(px, VR + 2, y, 36, 20, rev ? 0xF800 : 0x8410);
+    text_at(px, VR + 2 + (36 - text_w("REV", 1)) / 2, y + 7, "REV", rev ? 0xF800 : 0x8410, 1);
+}
+
+/* the bars beside the view: a dark panel with an edge line */
+static void draw_bars(uint16_t *px)
+{
+    fill(px, 0, 0, VX - 1, H, 0x1083);
+    fill(px, VX - 1, 0, 1, H, 0x31A6);
+    fill(px, VR, 0, 1, H, 0x31A6);
+    fill(px, VR + 1, 0, W - VR - 1, H, 0x1083);
 }
 
 static void draw_hud(uint16_t *px, const actions_t *act, float fps)
@@ -2682,24 +2803,24 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         }
         return;
     }
-    /* times, top left */
-    shade_box(px, 0, 0, 128, 40, 5);
+    /* times, top left of the view */
+    shade_box(px, VX, 0, VX + 94, 40, 5);
     snprintf(line, sizeof(line), "LAP %d/%d", g_lap < g_laps ? g_lap + 1 : g_laps, g_laps);
-    text_at(px, 4, 3, line, 0xFFE0, 1);
+    text_at(px, VX + 3, 3, line, 0xFFE0, 1);
     fmt_time(t1, sizeof(t1), g_race_t);
-    text_at(px, 52, 3, t1, 0xFFFF, 1);
+    text_at(px, VX + 50, 3, t1, 0xFFFF, 1);
     fmt_time(t1, sizeof(t1), g_lap_t);
     snprintf(line, sizeof(line), "LAP  %s", t1);
-    text_at(px, 4, 14, line, 0xFFFF, 1);
+    text_at(px, VX + 3, 14, line, 0xFFFF, 1);
     fmt_time(t1, sizeof(t1), g_best_lap);
     snprintf(line, sizeof(line), "BEST %s", t1);
-    text_at(px, 4, 25, line, 0x9FFF, 1);
-    /* map, top right */
-    draw_map(px, W - MAP_W - 4, 4);
-    text_at(px, W - MAP_W - 18, 4, "II", 0xC618, 1);
+    text_at(px, VX + 3, 25, line, 0x9FFF, 1);
+    /* map, top right of the view; the pause mark in the right bar */
+    draw_map(px, VR - MAP_W - 2, 2);
+    text_at(px, VR + 14, 6, "II", 0xC618, 1);
     /* speed, gear and the steering, bottom centre */
     int kmh = (int)(hypotf(c->vx, c->vz) * 3.6f + 0.5f);
-    int cx = s_touch_used && g_state != ST_FINISH ? GS_X + GS_W + 104 : W / 2;   /* clear of the slider and buttons */
+    int cx = s_touch_used && g_state != ST_FINISH ? VX + 150 : W / 2;   /* clear of the touch arrows */
     shade_box(px, cx - 92, H - 36, cx + 54, H - 2, 5);
     snprintf(line, sizeof(line), "%d", kmh);
     text_r(px, cx + 14, H - 31, line, 0xFFFF, 3);
@@ -2719,8 +2840,8 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
 
     if (s_touch_used && g_state != ST_FINISH)
         draw_touch(px, act);
-    else if (g_ctrl == CTRL_TWIN && (g_state == ST_RACE || g_state == ST_COUNT))
-        draw_gas_meter(px, act->d.brake, act->d.rev > 0);
+    else
+        draw_meters(px, g_brake_show, g_rev_show);
 
     if (g_state == ST_RACE && g_notes_on)
         draw_note(px);
@@ -2748,8 +2869,8 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         float d = g_delta;
         int cs = (int)(fabsf(d) * 100.f + 0.5f);
         snprintf(line, sizeof(line), "%c%d.%02d", d < 0 ? '-' : '+', cs / 100, cs % 100);
-        shade_box(px, 0, 40, 74, 60, 5);
-        text_at(px, 4, 43, line, d < 0 ? 0x07E0 : 0xF9A6, 2);
+        shade_box(px, VX, 40, VX + 74, 60, 5);
+        text_at(px, VX + 4, 43, line, d < 0 ? 0x07E0 : 0xF9A6, 2);
     }
     if (g_wrong_t > 1.f && ((int)(g_t * 3.f) & 1))
         text_c(px, 96, "WRONG WAY", 0xF800, 3);
@@ -2775,7 +2896,7 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
         text_c(px, 140, g_msg, 0x07FF, 2);
     if (g_show_fps) {
         snprintf(line, sizeof(line), "%.0f FPS", (double)fps);
-        text_at(px, 134, 3, line, 0x07E0, 1);
+        text_at(px, VX + 3, H - 12, line, 0x07E0, 1);
     }
 }
 
@@ -2788,48 +2909,82 @@ static bool make_meshes(void)
     b_reset();
     {
         const uint32_t BODY = 0xC81E28, WHITE = 0xF2F2F0, YEL = 0xF6BE1C, DARK = 0x1C1E24, GLASS = 0x18263A;
-        static const float low[][2] = { { 2.08f, 0.26f }, { 2.16f, 0.60f }, { 1.30f, 0.86f }, { -1.85f, 0.92f },
-                                        { -2.04f, 0.68f }, { -1.98f, 0.26f } };
-        uint32_t ls[6] = { DARK, BODY, BODY, BODY, DARK, DARK };
-        b_prism(low, 6, -0.86f, 0.86f, ls, BODY);
-        static const float cab[][2] = { { 1.30f, 0.86f }, { 0.30f, 1.36f }, { -1.30f, 1.38f }, { -1.85f, 0.92f } };
-        uint32_t cs[4] = { GLASS, WHITE, GLASS, GLASS };
-        b_prism(cab, 4, -0.74f, 0.74f, cs, GLASS);
-        /* the pillar between the side windows, and the sills under them */
-        b_box(-0.42f, 0.9f, -0.76f, -0.26f, 1.36f, 0.76f, BODY);
+        /* the lower body: six stations from the nose to the tail */
+        {
+            static const float xs[6] = { 2.20f, 2.05f, 1.30f, -1.40f, -1.95f, -2.08f };
+            static const float yb[6] = { 0.30f, 0.24f, 0.22f, 0.22f, 0.24f, 0.30f };
+            static const float yt[6] = { 0.58f, 0.72f, 0.86f, 0.92f, 0.90f, 0.80f };
+            static const float hw[6] = { 0.70f, 0.84f, 0.88f, 0.88f, 0.86f, 0.78f };
+            float sec[6 * 8][2];
+            for (int i = 0; i < 6; i++)
+                car_sec(&sec[i * 8], yb[i], yt[i], hw[i]);
+            uint32_t rgb[5 * 8];
+            for (int i = 0; i < 5; i++) {
+                /* bottom, skirt, side, shoulder, top, shoulder, side, skirt */
+                const uint32_t c[8] = { DARK, DARK, BODY, BODY, BODY, BODY, BODY, DARK };
+                memcpy(&rgb[i * 8], c, sizeof(c));
+            }
+            b_loft(xs, 6, sec, 8, rgb, DARK, DARK);
+        }
+        /* the cabin: the side windows lean in (narrower at the roof); windscreen, side windows split
+           by the B pillar, white roof, rear window */
+        {
+            static const float xs[5] = { 1.32f, 0.30f, -0.26f, -0.42f, -1.86f };
+            static const float yb[5] = { 0.85f, 0.87f, 0.88f, 0.88f, 0.90f };
+            static const float yt[5] = { 0.87f, 1.36f, 1.37f, 1.37f, 0.94f };
+            static const float wb[5] = { 0.74f, 0.76f, 0.76f, 0.76f, 0.74f };
+            static const float wt[5] = { 0.72f, 0.58f, 0.58f, 0.58f, 0.70f };
+            float sec[5 * 4][2];
+            for (int i = 0; i < 5; i++) {
+                sec[i * 4 + 0][0] = -wb[i], sec[i * 4 + 0][1] = yb[i];
+                sec[i * 4 + 1][0] = wb[i], sec[i * 4 + 1][1] = yb[i];
+                sec[i * 4 + 2][0] = wt[i], sec[i * 4 + 2][1] = yt[i];
+                sec[i * 4 + 3][0] = -wt[i], sec[i * 4 + 3][1] = yt[i];
+            }
+            /* edges: bottom (hidden), right side, top, left side */
+            const uint32_t rgb[4 * 4] = { 0, BODY, GLASS, BODY,        /* windscreen, A pillars */
+                                          0, GLASS, WHITE, GLASS,      /* front side windows */
+                                          0, BODY, WHITE, BODY,        /* B pillar */
+                                          0, GLASS, GLASS, GLASS };    /* rear side windows and rear window */
+            b_loft(xs, 5, sec, 4, rgb, 0, 0);
+        }
         /* bands along the doors: white, then a thin yellow one */
-        b_box(-1.30f, 0.34f, -0.88f, 1.10f, 0.48f, 0.88f, WHITE);
-        b_box(-1.30f, 0.48f, -0.88f, 1.10f, 0.53f, 0.88f, YEL);
+        b_box(-1.30f, 0.36f, -0.895f, 1.10f, 0.50f, 0.895f, WHITE);
+        b_box(-1.30f, 0.50f, -0.895f, 1.10f, 0.55f, 0.895f, YEL);
         /* door number panels */
-        b_box(-0.50f, 0.58f, -0.875f, 0.20f, 0.84f, 0.875f, WHITE);
-        b_box(-0.30f, 0.64f, -0.88f, -0.24f, 0.78f, 0.88f, DARK);
-        b_box(-0.05f, 0.64f, -0.88f, 0.01f, 0.78f, 0.88f, DARK);
+        b_box(-0.50f, 0.60f, -0.89f, 0.20f, 0.84f, 0.89f, WHITE);
+        b_box(-0.30f, 0.65f, -0.90f, -0.24f, 0.79f, 0.90f, DARK);
+        b_box(-0.05f, 0.65f, -0.90f, 0.01f, 0.79f, 0.90f, DARK);
         /* wheel arch flares */
         for (int i = 0; i < 2; i++) {
             float x = i ? -CAR_B : CAR_A + 0.1f;
-            b_box(x - 0.48f, 0.56f, -0.96f, x + 0.48f, 0.70f, -0.84f, BODY);
-            b_box(x - 0.48f, 0.56f, 0.84f, x + 0.48f, 0.70f, 0.96f, BODY);
+            b_box(x - 0.48f, 0.56f, -0.97f, x + 0.48f, 0.70f, -0.85f, BODY);
+            b_box(x - 0.48f, 0.56f, 0.85f, x + 0.48f, 0.70f, 0.97f, BODY);
         }
+        /* mirrors on the doors */
+        b_box(1.02f, 0.92f, -0.99f, 1.14f, 1.03f, -0.80f, BODY);
+        b_box(1.02f, 0.92f, 0.80f, 1.14f, 1.03f, 0.99f, BODY);
         /* bonnet vent, roof vent (low and dark) */
-        b_box(1.45f, 0.70f, -0.30f, 1.80f, 0.76f, 0.30f, DARK);
-        b_box(0.05f, 1.36f, -0.22f, 0.40f, 1.42f, 0.22f, DARK);
+        b_box(1.45f, 0.78f, -0.30f, 1.80f, 0.86f, 0.30f, DARK);
+        b_box(0.05f, 1.35f, -0.22f, 0.40f, 1.42f, 0.22f, DARK);
         /* rear wing: a wide plate on two struts, yellow end plates */
         b_box(-2.08f, 1.40f, -0.82f, -1.66f, 1.46f, 0.82f, BODY);
         b_box(-2.10f, 1.30f, -0.86f, -1.64f, 1.52f, -0.82f, YEL);
         b_box(-2.10f, 1.30f, 0.82f, -1.64f, 1.52f, 0.86f, YEL);
-        b_box(-1.92f, 0.92f, -0.55f, -1.86f, 1.40f, -0.47f, DARK);
-        b_box(-1.92f, 0.92f, 0.47f, -1.86f, 1.40f, 0.55f, DARK);
-        /* light pod on the nose: a dark bar with four lamps */
-        b_box(2.10f, 0.56f, -0.74f, 2.18f, 0.80f, 0.74f, DARK);
+        b_box(-1.92f, 0.88f, -0.55f, -1.86f, 1.40f, -0.47f, DARK);
+        b_box(-1.92f, 0.88f, 0.47f, -1.86f, 1.40f, 0.55f, DARK);
+        /* light pod on the nose: a dark bar with four lamps; a splitter under the bumper */
+        b_box(2.08f, 0.56f, -0.70f, 2.18f, 0.80f, 0.70f, DARK);
         for (int i = 0; i < 4; i++) {
-            float z = -0.54f + 0.36f * (float)i;
-            b_box(2.18f, 0.60f, z - 0.13f, 2.24f, 0.76f, z + 0.13f, 0xFFF4C0);
+            float z = -0.51f + 0.34f * (float)i;
+            b_box(2.18f, 0.60f, z - 0.12f, 2.24f, 0.76f, z + 0.12f, 0xFFF4C0);
         }
-        /* the rear: a dark panel, bright tail lights, a number plate */
-        b_box(-2.06f, 0.58f, -0.84f, -2.01f, 0.80f, 0.84f, DARK);
-        b_box(-2.08f, 0.61f, -0.80f, -2.04f, 0.77f, -0.48f, 0xFF4A1E);
-        b_box(-2.08f, 0.61f, 0.48f, -2.04f, 0.77f, 0.80f, 0xFF4A1E);
-        b_box(-2.05f, 0.36f, -0.26f, -2.00f, 0.50f, 0.26f, WHITE);
+        b_box(2.00f, 0.19f, -0.76f, 2.21f, 0.23f, 0.76f, DARK);
+        /* the rear: bright tail lights, a number plate, the exhaust */
+        b_box(-2.12f, 0.60f, -0.74f, -2.07f, 0.76f, -0.44f, 0xFF4A1E);
+        b_box(-2.12f, 0.60f, 0.44f, -2.07f, 0.76f, 0.74f, 0xFF4A1E);
+        b_box(-2.11f, 0.38f, -0.26f, -2.07f, 0.52f, 0.26f, WHITE);
+        b_box(-2.16f, 0.27f, 0.42f, -2.00f, 0.35f, 0.54f, 0x50505A);
         /* mud flaps */
         b_box(-1.76f, 0.10f, -0.88f, -1.71f, 0.44f, -0.60f, 0x2A2A2E);
         b_box(-1.76f, 0.10f, 0.60f, -1.71f, 0.44f, 0.88f, 0x2A2A2E);
@@ -2837,24 +2992,30 @@ static bool make_meshes(void)
         b_box(0.62f, 0.10f, 0.62f, 0.67f, 0.36f, 0.88f, 0x2A2A2E);
     }
     m_body = b_bake(25.f);
-    /* a wheel: a cylinder across z, tread in two shades so it shows turning */
+    /* a wheel: a tyre across z (tread in two shades), dark sidewalls, gold rims with spokes in two
+       shades set in a little, so it shows turning */
     b_reset();
     {
-        const int seg = 10;
-        const float r = 0.33f, hw = 0.13f;
+        const int seg = 12;
+        const float r = 0.33f, ri = 0.21f, hw = 0.13f, dish = 0.03f;
         int base = B.nv;
         for (int i = 0; i < seg; i++) {
-            float a = 6.2832f * (float)i / (float)seg;
-            b_v(cosf(a) * r, sinf(a) * r, -hw);
-            b_v(cosf(a) * r, sinf(a) * r, hw);
+            float a = 6.2832f * (float)i / (float)seg, ca = cosf(a), sa = sinf(a);
+            b_v(ca * r, sa * r, -hw);
+            b_v(ca * r, sa * r, hw);
+            b_v(ca * ri, sa * ri, -hw + dish);
+            b_v(ca * ri, sa * ri, hw - dish);
         }
-        int c0 = b_v(0, 0, -hw - 0.02f), c1 = b_v(0, 0, hw + 0.02f);
+        int c0 = b_v(0, 0, -hw + dish + 0.02f), c1 = b_v(0, 0, hw - dish - 0.02f);
         float c[3] = { 0, 0, 0 };
         for (int i = 0; i < seg; i++) {
-            int j = (i + 1) % seg;
-            b_quad(base + 2 * i, base + 2 * i + 1, base + 2 * j + 1, base + 2 * j, (i & 1) ? 0x202020 : 0x303030, c);
-            b_tri(base + 2 * i, base + 2 * j, c0, (i & 2) ? 0xB0B0B8 : 0x707078, c);
-            b_tri(base + 2 * i + 1, base + 2 * j + 1, c1, (i & 2) ? 0xB0B0B8 : 0x707078, c);
+            int j = (i + 1) % seg, a = base + 4 * i, b = base + 4 * j;
+            b_quad(a, a + 1, b + 1, b, (i & 1) ? 0x1E1E1E : 0x2E2E2E, c);
+            b_quad(a, b, b + 2, a + 2, 0x18181A, c);
+            b_quad(a + 1, b + 1, b + 3, a + 3, 0x18181A, c);
+            uint32_t rim = (i & 1) ? 0xE0B030 : 0x9C7818;
+            b_tri(a + 2, b + 2, c0, rim, c);
+            b_tri(a + 3, b + 3, c1, rim, c);
         }
     }
     m_wheel = b_bake(40.f);
@@ -3121,7 +3282,7 @@ int main(int argc, char **argv)
     papp_thread_cfg_t pcfg = { .name = "dl_present", .stack_size = 4096, .prio = PAPP_PRIO_HIGH, .core = 0 };
     papp_thread_t *pres = (g_surf && fb[0] && fb[1] && g_pres_go && g_pres_done)
                               ? papp_thread_create(presenter_main, NULL, &pcfg) : NULL;
-    e3d_t *e = e3d_create(W, H, 2);
+    e3d_t *e = e3d_create(VW, H, 2);
     int64_t t0 = papp_time_us();
     g_e = e;
     bool ok = pres && e && b_init();
@@ -3178,6 +3339,8 @@ int main(int argc, char **argv)
     /* performance per lap: average fps, the worst 1 s, render times (the log line at each lap) */
     int pf_n = 0, pf_lap = -1;
     double pf_t = 0, pf_geom = 0, pf_rast = 0;
+    double pf_upd = 0, pf_scene = 0, pf_e3d = 0, pf_hud = 0, pf_wait = 0;   /* where a frame goes, us */
+    int64_t tm_upd = 0, tm_scene = 0, tm_e3d = 0, tm_hud = 0, tm_wait = 0;
     float pf_worst = 999.f;
     int pf_max = 0;
     while (run && !papp_exit_requested()) {
@@ -3218,11 +3381,20 @@ int main(int argc, char **argv)
         update(&act, dt);
 
         uint16_t *px = fb[cur];
-        e3d_begin(e, px, W);
+        int64_t t1 = papp_time_us();
+        e3d_begin(e, px + VX, W);
         draw_scene(e);
+        int64_t t2 = papp_time_us();
         e3d_end(e);
+        int64_t t3 = papp_time_us();
+        draw_bars(px);
         if (!g_icon)
             draw_hud(px, &act, fps);
+        int64_t t4 = papp_time_us();
+        tm_upd = t1 - now;
+        tm_scene = t2 - t1;
+        tm_e3d = t3 - t2;
+        tm_hud = t4 - t3;
 
         frames++;
         if (now - stat_t >= 1000000) {
@@ -3238,6 +3410,11 @@ int main(int argc, char **argv)
             pf_t += dt_raw;
             pf_geom += st->t_geom_us;
             pf_rast += st->t_raster_us;
+            pf_upd += tm_upd;
+            pf_scene += tm_scene;
+            pf_e3d += tm_e3d;
+            pf_hud += tm_hud;
+            pf_wait += tm_wait;
             if (st->t_geom_us + st->t_raster_us > pf_max)
                 pf_max = st->t_geom_us + st->t_raster_us;
         } else if (pf_lap != g_lap || g_state != ST_RACE) {
@@ -3245,8 +3422,13 @@ int main(int argc, char **argv)
                 papp_log("dustline: perf lap %d%s: %.1f fps average, worst 1 s %.1f, geom %.1f ms + raster %.1f ms average, "
                          "worst frame %.1f ms\n", pf_lap + 1, g_evening ? " (evening)" : "", pf_n / pf_t, (double)pf_worst,
                          pf_geom / pf_n / 1000.0, pf_rast / pf_n / 1000.0, pf_max / 1000.0);
+            if (pf_n > 100)
+                papp_log("dustline: frame lap %d: input+physics %.2f ms, scene %.2f ms, e3d_end %.2f ms, hud %.2f ms, "
+                         "wait for present %.2f ms\n", pf_lap + 1, pf_upd / pf_n / 1000.0, pf_scene / pf_n / 1000.0,
+                         pf_e3d / pf_n / 1000.0, pf_hud / pf_n / 1000.0, pf_wait / pf_n / 1000.0);
             pf_n = 0;
             pf_t = pf_geom = pf_rast = 0;
+            pf_upd = pf_scene = pf_e3d = pf_hud = pf_wait = 0;
             pf_worst = 999.f;
             pf_max = 0;
             pf_lap = g_state == ST_RACE ? g_lap : -1;
@@ -3263,7 +3445,9 @@ int main(int argc, char **argv)
                      st->t_geom_us, st->t_raster_us, s_pot_raw, (unsigned long)as.underruns);
             log_t = now;
         }
+        int64_t t5 = papp_time_us();
         papp_sem_take(g_pres_done, PAPP_WAIT_FOREVER);
+        tm_wait = papp_time_us() - t5;
         g_pres_buf = px;
         papp_sem_give(g_pres_go);
         cur ^= 1;

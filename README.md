@@ -406,8 +406,12 @@ SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
   limit the car runs wide; the handbrake throws the tail out. A stability aid pulls the turn
   rate towards what the front wheels ask (within the grip), so slides stop when you straighten. Grip by surface: tarmac 1.15,
   dirt 1.1, gravel 1.05 (arcade grip, so the loose surfaces still turn at speed; the rear a little looser there), verge 0.62, grass 0.5 (and drag).
-- The car is a red rally hatchback: white roof, a white and yellow band along the doors, door
-  number panels, wheel arch flares, a light pod on the nose and a rear wing.
+- The car is a red rally hatchback, a lofted body (six cross-sections from nose to tail, with a
+  skirt and chamfered shoulders) and a cabin whose side windows lean in. White roof, a white and
+  yellow band along the doors, door number panels, wheel arch flares, mirrors, a light pod and a
+  splitter on the nose, a rear wing, an exhaust; gold spoked rims set into the tyres.
+- The 3D view is 320x240 in the middle of the 400x240 frame (20% fewer pixels to draw); the
+  40-column bars beside it hold the gas (left) and the brake and REV (right).
 - Pines, birches, rocks, hay bales on the outside of the sharp corners, marker posts and the
   start gantry; you bounce off them. Low bushes along the verges (near detail only; you drive
   through them). Spectators at the start and behind the tight corners. Dust behind the wheels on the loose stuff. A map of the
@@ -416,14 +420,14 @@ SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
 - Controls: three methods, picked on the title (Controls: in its menu; remembered in
   `settings.txt`). The first time, Touch + roller on a board with a roller (the 4.3"), else Gamepad.
   - Touch + roller: the 4.3" board's roller (paddle) steers, absolute: the middle of its travel is
-    straight ahead, its ends are full lock. Gas: the slider on the left of the screen (70 of the
-    240 rows, centred), a lever that stays where your finger leaves it (it goes back to zero at
-    each start). Steering arrows and BRAKE at the bottom right, REV above BRAKE.
+    straight ahead, its ends are full lock. Gas: the slider in the left bar (70 of the 240 rows,
+    centred), a lever that stays where your finger leaves it (it goes back to zero at each start).
+    BRAKE and REV in the right bar, the steering arrows at the bottom right of the view.
   - Gamepad: d-pad left/right (ramped in over 0.3 s) or the left stick steer; R2 (analog) or UP gas.
   - Twin stick, for analog pads: the right stick steers, the left stick from the centre up is the
     gas, in proportion (15% dead zone); down past 10% brakes, harder the further (full brake at
-    85%), and all the way down reverses. A meter on the left shows the gas (green), the brake
-    (red, BRAKE) or REV.
+    85%), and all the way down reverses.
+  In the pad methods the bars show meters: the gas in the left one, the brake and REV in the right.
   The sticks steer through a 12% dead zone and a curve that is very gentle round the centre
   (half way out is about an eighth of the lock, was over a third).
   In every method: A or B brakes and takes the gas off while held, L2 brakes (analog), DOWN
@@ -447,7 +451,10 @@ SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
   0.1 s); at a quarter, half and three quarters of the lap the split against it shows under the
   times, red when behind. Pause menu: Ghost on/off.
 
-On the Guition 4.3", over an autopilot lap: Pine Valley 49 fps average, 42 in the worst second
+On the Guition 7" with the 320x240 view, the new car and the faster HUD (1.2.0), over an
+autopilot lap of Pine Valley: 51.5 fps average, 43.4 in the worst second (1.1.0: 48.7 / 41.7).
+A frame: input and physics 1.2 ms, scene 0.9 ms, the 3D render 14.2 ms (geometry 7.6 +
+rasterising 7.4, both cores), HUD 2.3 ms. 1.1.0 on the Guition 4.3": Pine Valley 49 fps average, 42 in the worst second
 (geometry 6.6 ms + rasterising 7.8 ms a frame); Frost Pass 49 / 44; Sun Mesa 52 / 46. Autopilot
 laps 81.3 s, 90.7 s, 85.6 s (the host sim gives the same within 0.1 s, `STAGE=1` / `STAGE=2`). Evening: 42 fps, 37 in the worst second; the low sun costs
 nothing, the fog about 3.5 ms a frame (it touches every pixel).
@@ -459,7 +466,8 @@ python game/dustline/build.py           # -> build/dustline/dustline.papp
 Pass `auto` to let the computer drive (its times do not count, unless `rec`; B slows it down, to
 see the ghost pull away), `laps N` (race records count for 3 laps only), or
 `fps` to show the frame rate, `stage N` (0-2, not saved), `evening` / `day` for the look (`nofog`:
-evening without the haze, to measure it). Each lap logs a `perf` line: average fps, the worst second, render times.
+evening without the haze, to measure it). Each lap logs a `perf` line (average fps, the worst second,
+render times) and a `frame` line (where a frame goes: input and physics, scene, render, HUD, waiting).
 
 ---
 
