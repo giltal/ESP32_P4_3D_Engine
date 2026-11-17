@@ -25,9 +25,11 @@ The repository also has:
 
 - A **Python converter** that turns STL and OBJ models into engine meshes.
 - **Five examples**, including a full demo show.
-- **Three games** you can install on the launcher: [Shardwall](#a-game-shardwall), a 3D
-  brick-breaker, [Voidmarch](#a-second-game-voidmarch), a 3D invaders game, and
-  [Driftrock](#a-third-game-driftrock), rocks in space in 3D.
+- **Five games** you can install on the launcher: [Shardwall](#a-game-shardwall), a 3D
+  brick-breaker, [Voidmarch](#a-second-game-voidmarch), a 3D invaders game,
+  [Driftrock](#a-third-game-driftrock), rocks in space in 3D, [Dustline](#a-fourth-game-dustline),
+  a rally stage against the clock, and [Gorgewing](#a-fifth-game-gorgewing), a jet fighter run
+  down a canyon.
 - A **[user guide](docs/GUIDE.md)**.
 
 All the screenshots on this page come straight from a Guition JC1060P470C board (7"
@@ -469,6 +471,87 @@ see the ghost pull away), `laps N` (race records count for 3 laps only), or
 evening without the haze, to measure it). Each lap logs a `perf` line (average fps, the worst second,
 render times) and a `frame` line (where a frame goes: input and physics, scene, render, HUD, waiting).
 
+## A fifth game: Gorgewing
+
+<p align="center">
+  <img src="docs/images/gorgewing.png" width="49%" alt="Gorgewing: the grey jet from behind, low over the canyon floor and the river, a drone exploding with +150, a stone arch ahead">
+  <img src="docs/images/gorgewing_close.png" width="49%" alt="The jet close up, banking past a red rock wall, a rock spire behind it">
+  <img src="docs/images/gorgewing_lock.png" width="49%" alt="A missile lock box on a target ahead, the gunsight, the striped canyon walls">
+  <img src="docs/images/gorgewing_sector.png" width="49%" alt="SECTOR 3 +1000 as the jet reaches the third sector">
+  <img src="docs/images/gorgewing_title.png" width="49%" alt="The title: GORGEWING and the controls over the canyon">
+</p>
+
+`game/gorgewing` is a jet fighter run through a desert canyon that goes on and on. Fly low
+between the red rock walls, under the stone arches and round the spires, shoot what is in the
+way, and keep the tank full: fuel drains all the time, and only the gas balloons fill it.
+
+- **The canyon** is a loop of 6.1 km that repeats without a seam: its centre line and width are
+  sums of sines with whole periods over the loop. The width swings between about 36 and 92 m;
+  the walls lean out as they rise (to 64 m), and the rock is the smooth profile plus noise per
+  station and row, in six strata colours. The floor (scree, sand, a winding river) is the
+  floor layer, so the jet's shadow falls on it. 192 chunks of 32 m, each a floor mesh and a wall
+  mesh in two levels of detail (near: stations every 4 m, 7 rows; far: 8 m, 3 rows; the near
+  rows on a chunk's first station lie on the far rows' lines, so they meet without cracks).
+  Built once at start (1.3 s). When the jet passes the end of the loop, everything moves back
+  by its length. Eight stone arches span it (under at up to about 30 m in the middle, or over),
+  31 rock spires stand in the wider parts, boulders at the wall feet (near detail only).
+- **The jet**: steer with the d-pad (yaw, banking with the turn), up climbs (Pitch: inverted in
+  the menu swaps it), X / Y throttle up / down; speed 137 to 378 km/h. The camera rides behind
+  it, its heading following the jet's, kept inside the canyon. Walls, the floor, spires and
+  arches cost hull and bounce you off. The ceiling is 55 m (the rim is out of reach).
+- **Weapons**: A = the cannon (two guns, 13 rounds a second, about 400 m), B = a homing missile
+  (6 at the start, 9 at most) at the locked target: the one nearest the nose's line within 18
+  degrees and 420 m, shown with a box and LOCK. A missile does 5 to what it hits and 2 to
+  anything within 10 m.
+- **Enemies**, more and harder with the distance (sector every 2 km, a bonus each):
+
+  | Enemy | What it does | Hits | Points |
+  |---|---|---|---|
+  | Turret | on a wall or the floor; aims and fires shells at where you will be | 3 | 100 |
+  | SAM site | on the floor; launches a homing missile (it can be shot down: 50) | 4 | 200 |
+  | Drone | hovers in threes, then dives at the jet | 1 | 150 |
+  | Helicopter | flies ahead of you, sways across, fires bursts; leaves after a while | 8 | 400 |
+  | Enemy jet | head on, in ones or twos, a burst on the way | 3 | 500 |
+  | Mine | floats in clusters, explodes on contact | 1 | 50 |
+  | Barrage balloon | in a row across the canyon, its cable down to the floor | 3 | 75 |
+
+- **Fuel**: 1 to 2.8% a second with the throttle (the same per kilometre at any speed). The green
+  and yellow gas balloons (one every 400 to 800 m) give 22% and a missile when you fly into them;
+  shoot one and it is lost. Out of fuel, the engine dies and the jet glides down: the run is over.
+- **Lives**: three jets with 100 hull each; a new one comes after 2.4 s, blinking (no damage)
+  for 3 s. Score: the kills, 1 a 10 m, sector bonuses. High score and the longest flight in
+  `/sd/data/gorgewing/records.txt`.
+- **HUD**: score, high score, lives and hull at the top, speed, altitude and sector at the
+  bottom, the gunsight 150 m ahead of the nose, points where things were shot. The left bar is
+  the fuel (blinks red below 20%, with a beep) and the missiles; the right bar the throttle, GUN
+  and MSL.
+- **Touch** (the 7" has no buttons of its own): drag in the view to steer (a stick round where
+  the finger lands), the throttle slider, GUN (held) and MSL in the right bar; the top-right
+  corner pauses. The left stick steers too, R2 / L2 work the throttle (analog triggers in
+  proportion), R1 fires the cannon, L1 a missile.
+- **Pause menu** (START, SELECT or the corner): Resume, Restart run, Pitch, Sound, Haze, Show
+  fps, Exit; the settings in `/sd/data/gorgewing/settings.txt`. Haze is the engine's fog, off by
+  default (it costs about 3.5 ms a frame).
+- **Sound**, synthesised in the game: the turbine (a whine and a roar with the throttle), the
+  guns, missiles, rumbling explosions, hits, the pick-up chime, the lock tone and the low fuel
+  alarm.
+- The title runs the canyon behind the text, flown by the autopilot.
+
+On the Guition 7", over 6.4 km flown by the autopilot: 52.4 fps average, 45.4 in the worst
+second. A frame: input and game 1.4 ms, scene 1.05 ms, the 3D render 14.2 ms (geometry 5.7 +
+rasterising 9.5, both cores), HUD 1.7 ms. With Haze on: 43.0 fps, 41.0 in the worst second
+(10 km). Now and then (not in every run) a single frame takes about 110 ms, in geometry or in
+rasterising alike, also with no sound thread; a `slow frame` log line records it.
+
+```bash
+python game/gorgewing/build.py          # -> build/gorgewing/gorgewing.papp
+```
+
+Pass `auto` to let the computer fly (it scores, but no records are saved; a new run starts after
+game over), `god` (no damage, no fuel used), `secs N` (exit after N s), `fps`, `haze`, `nosound`,
+`keys` (log the buttons) or `icon` (a still close-up). Each run logs a `perf` line (average fps,
+the worst second, render times; every 60 s on a long run) and a `frame` line (where a frame goes).
+
 ---
 
 ## Quick start
@@ -574,6 +657,7 @@ game/
   voidmarch                   Voidmarch, a 3D invaders game
   driftrock                   Driftrock, rocks in space in 3D
   dustline                    Dustline, a rally stage against the clock
+  gorgewing                   Gorgewing, a jet fighter run down a canyon
 examples/
   papp/papp_common.py         shared PAPP build helper
   papp/demo                   the demo show
