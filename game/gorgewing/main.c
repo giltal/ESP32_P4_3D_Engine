@@ -24,7 +24,8 @@
  *
  * Arguments: `auto` = the computer flies (no records), `god` = no damage and no
  * fuel use, `fps` = show the frame rate, `secs N` = exit after N s, `icon` = a
- * still close-up for the icon.
+ * still close-up for the icon, `haze` = the fog on, `nosound` = no audio thread,
+ * `keys` = log the buttons pressed.
  */
 #include "papp/papp.h"
 #include "e3d.h"
