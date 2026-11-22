@@ -649,7 +649,9 @@ It then reports the bounds and whether the mesh is closed.
 e3d/                          the engine, an ESP-IDF component
   include/e3d.h               the API, commented
   src/e3d.c                   meshes, loader, matrices, objects
-  src/e3d_render.c            the renderer: geometry, binning, rasterising, PIE kernels
+  src/e3d_render.c            the renderer: geometry, binning, rasterising
+  src/e3d_simd.h              the SIMD code (lighting, fill, copy) and the choice by chip revision
+  src/e3d_simd_kernels.inc    that code; built by e3d_simd_pie.c (v1.x chips) and e3d_simd_espv.c (v3.x)
   src/e3d_port.h              platform layer: ESP-IDF / PAPP / host
   src/e3d_mem.h               the engine's heap (PSRAM)
 game/
@@ -723,7 +725,7 @@ Most of the cost on the P4 is PSRAM traffic, not arithmetic: a cache miss costs 
 - **Primitives in SRAM.** Each core keeps its primitives (36 bytes each, written as 9 words) in 4.6 KB chunks. The first chunks are in internal SRAM, taken one per frame while the internal heap keeps 40 KB free, up to 8 per core. Further chunks come from PSRAM. Writing a primitive to PSRAM costs about 780 cycles, because each new cache line is read before it is written. In SRAM the cost is much lower, and the rasteriser reads them back from SRAM too. The band bins (16-bit indices) are in SRAM as well. The per-object scratch stays in PSRAM, where measurements showed it costs nothing extra.
 - **Engine heap.** `e3d_mem.h` sends the engine's own `malloc`s to PSRAM, 16-byte aligned for PIE. On the launcher, blocks under 1 KB would otherwise go to internal SRAM. The heap can also return the P4's LP SRAM, which is uncached and slow, so SRAM allocations check the address and give such blocks back.
 - **Background.** `e3d_set_background_rows` fills each band's rows straight into the SRAM tile. That is much faster than `e3d_set_background`, which copies an image from PSRAM. The demo draws its sky gradient and stars this way.
-- **PIE vector unit.** When `e3d_render.c` is compiled with `-march=..._xesppie` (as both builds do), tile clears and the copy-out use the P4's 128-bit PIE loads and stores. PIE is integer-only (it has no float SIMD or divide). A PIE vertex transform from 16-bit mesh positions was built and measured: it was about 15% slower than the scheduled float transform, because each vertex still needs a divide and a float projection, and the 16-bit pass adds memory traffic. It was therefore not kept. The float transform writes its rows out so the dependent chains overlap, which cut it from about 375 to about 150 cycles per vertex when cached.
+- **PIE vector unit.** Tile clears and the copy-out use the P4's 128-bit PIE loads and stores. PIE is integer-only (it has no float SIMD or divide). A PIE vertex transform from 16-bit mesh positions was built and measured: it was about 15% slower than the scheduled float transform, because each vertex still needs a divide and a float projection, and the 16-bit pass adds memory traffic. It was therefore not kept. The float transform writes its rows out so the dependent chains overlap, which cut it from about 375 to about 150 cycles per vertex when cached.
 - **Batched lighting in fixed point.** Each lit object's corner normals are lit together, 8 at a time, in 16-bit fixed point with PIE:
   - The meshes keep their normals in Q14 (`e3d_mesh.qn`).
   - The light and half vectors are made per vertex in float, since they need 1/sqrt.
@@ -732,6 +734,7 @@ Most of the cost on the P4 is PSRAM traffic, not arithmetic: a cache miss costs 
   - For wireframe and double-sided objects the batch runs a second time with the normal matrix negated, which lights the back faces.
 
   At start-up the PIE kernel is checked against a C version of the same arithmetic, which it matches bit for bit; if it ever differed, the C version would be used. Objects with a non-uniform scale or a shininess that is not a whole number are lit per corner in float as before.
+- **Chip revisions v1.x and v3.x.** Both have the PIE unit, but v3.x chips encode its instructions differently (GCC: `-march=..._xesppie` for v1.x, `..._xespv` for v3.x, the same mnemonics). Code built for one generation faults on the other. So the SIMD code (`src/e3d_simd_kernels.inc`: the lighting kernel, block fill and copy) is built twice, by `e3d_simd_pie.c` and `e3d_simd_espv.c`, each with its `-march`. The first `e3d_create` picks the set for the chip revision it runs on (`e3d_port_chip_rev`; on the launcher `papp_chip_rev`, launcher 0.33 or later) and logs it (`e3d: SIMD: PIE, chip v1.x`). The rest of the engine is plain RV32, so one binary runs on both. With an older launcher, which can't tell the revision, or `-DE3D_NO_SIMD`, the engine uses its C paths on every chip.
 - **Fog** looks its factor up in a table indexed by the exponent and top 6 mantissa bits of the depth as a float. The table is made once per density, so there is no divide per pixel.
 - **What is slow on the P4.** These measurements guided the code:
   - Taken branches cost several cycles, so a 3-instruction loop runs at about 5 cycles per iteration.

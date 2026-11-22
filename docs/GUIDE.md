@@ -100,7 +100,9 @@ Then add `e3d` to your component's `REQUIRES` (or `PRIV_REQUIRES`) and write
 `#include "e3d.h"`.
 
 The component compiles itself with `-O2`, whatever the project's optimisation level. It
-also compiles the renderer with the P4's PIE extension (`-march=..._xesppie`).
+also builds the engine's SIMD code twice, for the P4's PIE extension on chip revisions v1.x
+(`-march=..._xesppie`) and its re-encoded form on v3.x (`..._xespv`): the engine picks the one for
+the chip at start-up (`e3d/src/e3d_simd.h`).
 
 These sdkconfig settings matter:
 
@@ -122,8 +124,10 @@ The engine's worker task runs on core 1, at the priority of the task that calls
 ### 2.2 As part of a PAPP
 
 The PAPP examples build with `examples/papp/papp_common.py`. It compiles
-`e3d/src/e3d.c` and `e3d/src/e3d_render.c` into the app, with `-O2` and PIE for the
-renderer. A new app's `build.py` is three lines:
+the engine into the app (`papp_common.engine_sources()`), with `-O2` and its SIMD code built for
+both chip generations (`engine_cflags()`: v1.x and v3.x chips encode the SIMD instructions
+differently; the engine picks the copy for the chip it runs on, so one .papp runs on both). That
+needs launcher 0.33 or later; an older one gets the C paths. A new app's `build.py` is three lines:
 
 ```python
 sys.path.insert(0, "path/to/ESP32_P4_3D_Engine/examples/papp")
@@ -737,8 +741,9 @@ is slow on the P4, and why the work happens in SRAM.
 - A log macro.
 - `E3D_FAST`, the attribute that puts code in internal RAM.
 
-To run elsewhere, add a backend there. A non-P4 target also needs `e3d_render.c` built
-without the PIE `-march`; its C paths are used then.
+To run elsewhere, add a backend there, with `e3d_port_chip_rev` returning -1. A non-P4 target
+builds `e3d_simd_pie.c` and `e3d_simd_espv.c` without their `-march`; they are then empty and the C
+paths are used.
 
 ---
 

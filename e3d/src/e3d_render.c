@@ -28,6 +28,7 @@
 
 #include "e3d_port.h"
 #include "e3d_mem.h"
+#include "e3d_simd.h"
 
 #define now_us     e3d_port_time_us
 #define alloc_sram e3d_port_alloc_sram
@@ -158,7 +159,6 @@ struct e3d {
     uint8_t fog_z[FOG_ZN];         /* the fog factor by depth: see fog_tile */
     float fog_zk;                  /* the density fog_z was made for */
     int threads;
-    bool pie_light;                /* the PIE lighting kernel passed its check */
 #if E3D_PORT_THREADS
     e3d_port_thread worker;
     e3d_port_sem go, done;
@@ -170,9 +170,12 @@ struct e3d {
 
 static void raster(e3d_t *e, int tid);
 static void geo_run(e3d_t *e, int tid);
-#if defined(__riscv_xesppie)
-static bool light_batch_check(void);
-#endif
+static bool light_batch_check(void (*light_batch)(const int16_t *, int16_t *, int, const int16_t *, int));
+
+/* the SIMD code for the chip this runs on (e3d_simd.h), NULL = plain C; one
+ * choice per run, made by the first e3d_create */
+static const e3d_simd_t *s_simd;
+static bool s_simd_picked;
 
 #if E3D_PORT_THREADS
 static int worker_main(void *arg)
@@ -236,9 +239,12 @@ e3d_t *e3d_create(int width, int height, int threads)
     for (int i = 0; i <= 256; i++)   /* fog factor for depth * density * 32 = i */
         e->fog_lut[i] = (uint8_t)(expf(-(float)i / 32.f) * 32.f + 0.5f);
     e->threads = 1;
-#if defined(__riscv_xesppie)
-    e->pie_light = light_batch_check();
-#endif
+    if (!s_simd_picked) {
+        s_simd_picked = true;
+        const e3d_simd_t *simd = e3d_simd_pick();
+        s_simd = simd && light_batch_check(simd->light) ? simd : NULL;
+        E3D_LOG("SIMD: %s", s_simd ? s_simd->name : "none, plain C");
+    }
 #if E3D_PORT_THREADS
     if (threads > 1 && e3d_port_threads_available() && tile_alloc(&e->tile[1], width)) {
         e->go = e3d_port_sem_create();
@@ -1023,7 +1029,7 @@ void e3d_draw(e3d_t *e, const e3d_object *o)
 /* â”€â”€ Batched lighting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
  * Lights all of an object's corner normals at once, in 16-bit fixed point.
  * The light and half vectors are made per vertex in float, since they need
- * 1/sqrt. Then, per normal, 8 at a time with PIE:
+ * 1/sqrt. Then, per normal, 8 at a time with the chip's SIMD (e3d_simd.h):
  *   - the normal goes into world space
  *   - n.L and n.H, with the highlight power by repeated squaring
  *   - the colour factors F = ambient + kd * light (Q11) and S = ks * light (Q4)
@@ -1036,7 +1042,7 @@ void e3d_draw(e3d_t *e, const e3d_object *o)
 
 static inline int16_t sat16(int32_t v) { return (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
 
-/* the same arithmetic in C: the host build, and the check of the PIE one */
+/* the same arithmetic in C: without SIMD, and the check of the SIMD one */
 static void light_batch_c(const int16_t *qn, int16_t *nl, int np, const int16_t *K, int shin)
 {
     for (int u = 0; u < np; u++) {
@@ -1058,138 +1064,10 @@ static void light_batch_c(const int16_t *qn, int16_t *nl, int np, const int16_t 
     }
 }
 
-#if defined(__riscv_xesppie)
-static const int16_t lb_one[8] __attribute__((aligned(16))) = {
-    16384, 16384, 16384, 16384, 16384, 16384, 16384, 16384 };
 
-/* PIE takes its integer operands only in x8-x15, hence the register variables. Each step
- * of 8 normals walks the 3 normal arrays and the 6 nl arrays by the stride
- * of one array. */
-E3D_FAST static void light_batch(const int16_t *qn, int16_t *nl, int np, const int16_t *K, int shin)
-{
-    int16_t ds[16] __attribute__((aligned(16)));   /* kd, then the highlight base / power */
-    register int sh __asm__("a1") = 14;
-    register int st __asm__("a0") = np * (int)sizeof(int16_t);
-    __asm__ volatile("esp.movx.w.sar %0" : : "r"(sh));
-    for (int i = 0; i < np; i += 8) {
-        register const int16_t *pk __asm__("a2") = K;
-        register const int16_t *pn __asm__("a3") = qn + i;
-        register int16_t *pl __asm__("a4") = nl + i;
-        register int16_t *pd __asm__("a5") = ds;
-        __asm__ volatile(
-            "esp.vld.128.ip q7, %[k], 16\n\t"
-            "esp.vld.128.ip q6, %[k], 0\n\t"
-            "esp.vld.128.xp q0, %[n], %[st]\n\t"
-            "esp.vld.128.xp q1, %[n], %[st]\n\t"
-            "esp.vld.128.xp q2, %[n], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q0, q7, 0\n\t"
-            "esp.vsmulas.s16.qacc q1, q7, 1\n\t"
-            "esp.vsmulas.s16.qacc q2, q7, 2\n\t"
-            "esp.srcmb.s16.qacc q3, %[sh], 1\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q0, q7, 3\n\t"
-            "esp.vsmulas.s16.qacc q1, q7, 4\n\t"
-            "esp.vsmulas.s16.qacc q2, q7, 5\n\t"
-            "esp.srcmb.s16.qacc q4, %[sh], 1\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q0, q7, 6\n\t"
-            "esp.vsmulas.s16.qacc q1, q7, 7\n\t"
-            "esp.vsmulas.s16.qacc q2, q6, 0\n\t"
-            "esp.srcmb.s16.qacc q5, %[sh], 1\n\t"
-            "esp.vld.128.xp q0, %[l], %[st]\n\t"
-            "esp.vld.128.xp q1, %[l], %[st]\n\t"
-            "esp.vld.128.xp q2, %[l], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vmulas.s16.qacc q3, q0\n\t"
-            "esp.vmulas.s16.qacc q4, q1\n\t"
-            "esp.vmulas.s16.qacc q5, q2\n\t"
-            "esp.srcmb.s16.qacc q0, %[sh], 1\n\t"
-            "esp.vld.128.xp q1, %[l], %[st]\n\t"
-            "esp.vld.128.xp q2, %[l], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vmulas.s16.qacc q3, q1\n\t"
-            "esp.vmulas.s16.qacc q4, q2\n\t"
-            "esp.vld.128.xp q1, %[l], %[st]\n\t"
-            "esp.vmulas.s16.qacc q5, q1\n\t"
-            "esp.srcmb.s16.qacc q1, %[sh], 1\n\t"
-            "esp.zero.q q2\n\t"
-            "esp.vmax.s16 q0, q0, q2\n\t"
-            "esp.vcmp.gt.s16 q3, q0, q2\n\t"
-            "esp.vmax.s16 q1, q1, q2\n\t"
-            "esp.andq q1, q1, q3\n\t"
-            "esp.vst.128.ip q0, %[d], 16\n\t"
-            "esp.vst.128.ip q1, %[d], 0"
-            : [k] "+r"(pk), [n] "+r"(pn), [l] "+r"(pl), [d] "+r"(pd)
-            : [st] "r"(st), [sh] "r"(sh)
-            : "memory");
-        register const int16_t *po __asm__("a3") = lb_one;
-        __asm__ volatile(
-            "esp.vld.128.ip q1, %[d], 0\n\t"
-            "esp.vld.128.ip q2, %[o], 0\n\t"
-            "mv t0, %[n]\n"
-            "1:\n\t"
-            "andi t1, t0, 1\n\t"
-            "beqz t1, 2f\n\t"
-            "esp.vmul.s16 q2, q2, q1\n"
-            "2:\n\t"
-            "srli t0, t0, 1\n\t"
-            "beqz t0, 3f\n\t"
-            "esp.vmul.s16 q1, q1, q1\n\t"
-            "j 1b\n"
-            "3:\n\t"
-            "esp.vst.128.ip q2, %[d], 0"
-            : [d] "+r"(pd), [o] "+r"(po)
-            : [n] "r"(shin)
-            : "t0", "t1", "memory");
-        pk = K + 8;
-        pd = ds;
-        pl = nl + i;
-        __asm__ volatile(
-            "esp.vld.128.ip q6, %[k], 0\n\t"
-            "esp.vld.128.ip q0, %[d], 16\n\t"
-            "esp.vld.128.ip q1, %[d], 0\n\t"
-            "esp.vld.128.ip q2, %[o], 0\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q0, q6, 1\n\t"
-            "esp.vsmulas.s16.qacc q2, q6, 7\n\t"
-            "esp.srcmb.s16.qacc q3, %[sh], 1\n\t"
-            "esp.vst.128.xp q3, %[l], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q0, q6, 2\n\t"
-            "esp.vsmulas.s16.qacc q2, q6, 7\n\t"
-            "esp.srcmb.s16.qacc q3, %[sh], 1\n\t"
-            "esp.vst.128.xp q3, %[l], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q0, q6, 3\n\t"
-            "esp.vsmulas.s16.qacc q2, q6, 7\n\t"
-            "esp.srcmb.s16.qacc q3, %[sh], 1\n\t"
-            "esp.vst.128.xp q3, %[l], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q1, q6, 4\n\t"
-            "esp.srcmb.s16.qacc q3, %[sh], 1\n\t"
-            "esp.vst.128.xp q3, %[l], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q1, q6, 5\n\t"
-            "esp.srcmb.s16.qacc q3, %[sh], 1\n\t"
-            "esp.vst.128.xp q3, %[l], %[st]\n\t"
-            "esp.zero.qacc\n\t"
-            "esp.vsmulas.s16.qacc q1, q6, 6\n\t"
-            "esp.srcmb.s16.qacc q3, %[sh], 1\n\t"
-            "esp.vst.128.xp q3, %[l], %[st]"
-            : [k] "+r"(pk), [d] "+r"(pd), [l] "+r"(pl), [o] "+r"(po)
-            : [st] "r"(st), [sh] "r"(sh)
-            : "memory");
-    }
-}
-#else
-#define light_batch light_batch_c
-#endif
-
-#if defined(__riscv_xesppie)
-/* The PIE kernel against the C one on made-up normals: a difference beyond
- * rounding means the C one is used. */
-static bool light_batch_check(void)
+/* A SIMD lighting kernel against the C one on made-up normals: a difference
+ * beyond rounding means plain C is used. */
+static bool light_batch_check(void (*light_batch)(const int16_t *, int16_t *, int, const int16_t *, int))
 {
     enum { N = 64 };
     int16_t *qn = malloc(sizeof(int16_t) * 3 * N), *a = malloc(sizeof(int16_t) * 6 * N), *b = malloc(sizeof(int16_t) * 6 * N);
@@ -1236,12 +1114,11 @@ static bool light_batch_check(void)
         }
         ok = worst <= 2;
         if (!ok)
-            E3D_LOG("PIE lighting differs from C by %d, using C", worst);
+            E3D_LOG("SIMD lighting differs from C by %d, using C", worst);
     }
     free(qn); free(a); free(b);
     return ok;
 }
-#endif
 
 
 /* the colour factors of the object's normals into g->nl (see above), and
@@ -1306,14 +1183,12 @@ E3D_FAST static bool light_object(const e3d_t *e, geo_t *g, const e3d_mesh *mesh
         for (int i = 0; i < 16; i++)
             Kb[i] = (int16_t)(i < 9 ? -K[i] : K[i]);
     }
-#if defined(__riscv_xesppie)
-    if (e->pie_light) {
-        light_batch(mesh->qn, nl, np, K, e->shin_n);
+    if (s_simd) {
+        s_simd->light(mesh->qn, nl, np, K, e->shin_n);
         if (back)
-            light_batch(mesh->qn, g->nlb, np, Kb, e->shin_n);
+            s_simd->light(mesh->qn, g->nlb, np, Kb, e->shin_n);
         return true;
     }
-#endif
     light_batch_c(mesh->qn, nl, np, K, e->shin_n);
     if (back)
         light_batch_c(mesh->qn, g->nlb, np, Kb, e->shin_n);
@@ -1800,54 +1675,20 @@ E3D_FAST static void fog_tile(const e3d_t *e, tile_t *tl)
     }
 }
 
-/* Block fill and copy, n bytes. With the P4's PIE unit (-march=..._xesppie)
- * they use 128-bit stores when both ends are 16-byte aligned and n is a
- * multiple of 64. */
-#if defined(__riscv_xesppie)
-static inline bool pie_ok(const void *a, const void *b, size_t n)
+
+/* Block fill and copy, n bytes: with the chip's SIMD (e3d_simd.h) when both
+ * ends are 16-byte aligned and n is a multiple of 64. */
+static inline bool simd_ok(const void *a, const void *b, size_t n)
 {
-    return !(((uintptr_t)a | (uintptr_t)b) & 15) && !(n & 63);
+    return s_simd && !(((uintptr_t)a | (uintptr_t)b) & 15) && !(n & 63);
 }
 
 E3D_FAST static void fill32(void *dst, uint32_t v, size_t n)
 {
-    if (!pie_ok(dst, dst, n)) {
-        uint32_t *d = dst;
-        for (size_t i = 0; i < n / 4; i++)
-            d[i] = v;
+    if (simd_ok(dst, dst, n)) {
+        s_simd->fill64(dst, v, n);
         return;
     }
-    uint32_t vv[4] __attribute__((aligned(16))) = { v, v, v, v };
-    const uint32_t *pv = vv;
-    __asm__ volatile("esp.vld.128.ip q0, %0, 0" : "+r"(pv) : "m"(vv) : "memory");
-    for (size_t i = 0; i < n; i += 64)
-        __asm__ volatile("esp.vst.128.ip q0, %0, 16\n\t"
-                         "esp.vst.128.ip q0, %0, 16\n\t"
-                         "esp.vst.128.ip q0, %0, 16\n\t"
-                         "esp.vst.128.ip q0, %0, 16"
-                         : "+r"(dst) : : "memory");
-}
-
-E3D_FAST static void copy_block(void *dst, const void *src, size_t n)
-{
-    if (!pie_ok(dst, src, n)) {
-        memcpy(dst, src, n);
-        return;
-    }
-    for (size_t i = 0; i < n; i += 64)
-        __asm__ volatile("esp.vld.128.ip q0, %0, 16\n\t"
-                         "esp.vld.128.ip q1, %0, 16\n\t"
-                         "esp.vld.128.ip q2, %0, 16\n\t"
-                         "esp.vld.128.ip q3, %0, 16\n\t"
-                         "esp.vst.128.ip q0, %1, 16\n\t"
-                         "esp.vst.128.ip q1, %1, 16\n\t"
-                         "esp.vst.128.ip q2, %1, 16\n\t"
-                         "esp.vst.128.ip q3, %1, 16"
-                         : "+r"(src), "+r"(dst) : : "memory");
-}
-#else
-static void fill32(void *dst, uint32_t v, size_t n)
-{
     if (v == 0) {
         memset(dst, 0, n);
         return;
@@ -1857,8 +1698,14 @@ static void fill32(void *dst, uint32_t v, size_t n)
         d[i] = v;
 }
 
-static void copy_block(void *dst, const void *src, size_t n) { memcpy(dst, src, n); }
-#endif
+E3D_FAST static void copy_block(void *dst, const void *src, size_t n)
+{
+    if (simd_ok(dst, src, n)) {
+        s_simd->copy64(dst, src, n);
+        return;
+    }
+    memcpy(dst, src, n);
+}
 
 E3D_FAST static void raster_band(e3d_t *e, tile_t *tl, int band)
 {

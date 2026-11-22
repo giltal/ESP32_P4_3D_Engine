@@ -20,6 +20,8 @@
  *   E3D_PORT_THREADS             1 when there is a second core to run on
  *   e3d_port_sem_* / thread_*    a binary semaphore and a thread with join
  *   E3D_LOG(fmt, ...)            a printf-style log line (no prefix or newline)
+ *   e3d_port_chip_rev()          the P4's revision, major * 100 + minor; -1 = unknown
+ *                                (picks the SIMD code, e3d_simd.h)
  */
 #pragma once
 
@@ -54,11 +56,13 @@ static inline size_t e3d_port_sram_free(void) { return 0; }
 static inline size_t e3d_port_dma_free(void) { return 0; }
 static inline void *e3d_port_ext_alloc(size_t n) { return malloc(n); }
 static inline void e3d_port_ext_free(void *p) { free(p); }
+static inline int e3d_port_chip_rev(void) { return -1; }
 
 /* ════════════════════════════════════════════════════════════════════════ */
 #elif defined(ESP_PLATFORM) && !defined(E3D_PORT_PAPP)
 
 #include "esp_attr.h"
+#include "esp_chip_info.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -98,6 +102,12 @@ static inline void *e3d_port_ext_alloc(size_t n)
     return p ? p : heap_caps_aligned_alloc(16, n, MALLOC_CAP_8BIT);
 }
 static inline void e3d_port_ext_free(void *p) { heap_caps_free(p); }
+static inline int e3d_port_chip_rev(void)
+{
+    esp_chip_info_t ci;
+    esp_chip_info(&ci);
+    return ci.revision;
+}
 
 typedef SemaphoreHandle_t e3d_port_sem;
 static inline e3d_port_sem e3d_port_sem_create(void) { return xSemaphoreCreateBinary(); }
@@ -189,6 +199,9 @@ static inline size_t e3d_port_dma_free(void) { return papp_mem_free_size(PAPP_ME
 /* On the launcher, malloc puts blocks under 1 KB in internal SRAM */
 static inline void *e3d_port_ext_alloc(size_t n) { return papp_alloc(n, PAPP_MEM_LARGE, 16); }
 static inline void e3d_port_ext_free(void *p) { papp_free(p); }
+/* launcher >= 0.33 (SYS v4). Weak, so the engine still links against an older SDK: -1, plain C */
+int papp_chip_rev(void) __attribute__((weak));
+static inline int e3d_port_chip_rev(void) { return papp_chip_rev ? papp_chip_rev() : -1; }
 
 typedef papp_sem_t *e3d_port_sem;
 static inline e3d_port_sem e3d_port_sem_create(void) { return papp_sem_create(0, 1); }

@@ -41,6 +41,24 @@ def embed_text(out_dir, files):
     return path
 
 
+# The engine's SIMD code is built twice, once per chip generation: v1.x chips have PIE
+# (-march ..._xesppie), v3.x the same instructions re-encoded (_xespv), and code for one faults on
+# the other. The engine picks the set for the chip when it starts (e3d/src/e3d_simd.h); the rest
+# is plain RV32, so one .papp runs on both.
+SIMD_FILES = {"e3d_simd_pie.c": ["-march=rv32imafc_zicsr_zifencei_xesppie"],
+              "e3d_simd_espv.c": ["-march=rv32imafc_zicsr_zifencei_xespv"]}
+
+
+def engine_sources():
+    """the engine's C files (for build scripts of their own: with engine_cflags())"""
+    return [os.path.join(ENGINE, "src", f) for f in ("e3d.c", "e3d_render.c", *SIMD_FILES)]
+
+
+def engine_cflags():
+    """{engine file: its own flags}, for papp_build's per_file_cflags"""
+    return {os.path.join(ENGINE, "src", f): list(fl) for f, fl in SIMD_FILES.items()}
+
+
 def build(name, here, sources, embed=None, includes=()):
     """name: the PAPP name; here: the example's folder (icon.png, version.txt);
     sources: the example's own C files; embed: {c_name: text file} to embed;
@@ -48,11 +66,10 @@ def build(name, here, sources, embed=None, includes=()):
     papp_build = _sdk()
     out = os.path.join(ROOT, "build", name)
     src = [os.path.join(here, s) for s in sources]
-    src += [os.path.join(ENGINE, "src", "e3d.c"), os.path.join(ENGINE, "src", "e3d_render.c")]
+    src += engine_sources()
     if embed:
         src.append(embed_text(out, embed))
-    # the renderer uses the P4's PIE (128-bit integer SIMD)
-    pie = {os.path.join(ENGINE, "src", "e3d_render.c"): ["-march=rv32imafc_zicsr_zifencei_xesppie"]}
+    pie = engine_cflags()
     has_icon = os.path.isfile(os.path.join(here, "icon.png"))
     has_version = os.path.isfile(os.path.join(here, "version.txt"))
     papp_build.build(name, src, includes=[os.path.join(ENGINE, "include"), os.path.join(ENGINE, "src")] + list(includes),
