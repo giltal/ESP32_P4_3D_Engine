@@ -435,7 +435,8 @@ SOFT SAND. Grip: snow 1.0, ice 0.86, sand 1.0 (and drag), hardpan 1.1.
   In every method: A or B brakes and takes the gas off while held, L2 brakes (analog), DOWN
   reverses (up to 25 km/h), X handbrake, Y back on the road, START or the top-right corner
   pauses. The wheels turn slower at speed. In the pad methods the roller is not read and the
-  touch controls show once you touch the screen.
+  touch controls show once you touch the screen. Controls also has Swap L2 and R2 (saved), for
+  pads that report the triggers the other way round: the trigger analog values and buttons trade places.
 - Records: best lap and best race (3 laps) in `/sd/data/dustline/records.txt`. Save race and
   Save and exit in the pause menu (`/sd/data/dustline/save.txt`); Continue on the title loads it.
 - Pace notes: the corners are found from the course's curvature and graded like a co-driver's

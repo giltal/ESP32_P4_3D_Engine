@@ -1334,7 +1334,9 @@ static bool  g_auto, g_icon, g_auto_rec, g_show_fps, g_evening;
    -1 until chosen: the roller if the board has one, else the gamepad. */
 enum { CTRL_ROLLER, CTRL_PAD, CTRL_TWIN, NCTRL_MODES };
 static const char *const ctrl_name[NCTRL_MODES] = { "Touch + roller", "Gamepad", "Twin stick" };
-static int g_ctrl = -1;   /* g_auto_rec: the computer's times count (testing) */
+static int g_ctrl = -1;
+/* swap the two triggers (analog and buttons), for pads that report them the other way round */
+static bool g_swap_trig;   /* g_auto_rec: the computer's times count (testing) */
 static float g_msg_t;
 static const char *g_msg;
 static float g_shake;
@@ -1369,7 +1371,8 @@ static void settings_io(bool save)
         mkdir(DATA_DIR, 0777);
         FILE *f = fopen(SET_PATH, "w");
         if (f) {
-            fprintf(f, "evening=%d\nstage=%d\ncontrols=%d\n", g_evening ? 1 : 0, g_stage, g_ctrl);
+            fprintf(f, "evening=%d\nstage=%d\ncontrols=%d\ntriggers=%d\n", g_evening ? 1 : 0, g_stage, g_ctrl,
+                    g_swap_trig ? 1 : 0);
             fclose(f);
         }
     } else {
@@ -1382,8 +1385,10 @@ static void settings_io(bool save)
                 g_stage = v;
                 g_st = &k_stage[v];
             }
-            if (fscanf(f, "controls=%d", &v) == 1 && v >= 0 && v < NCTRL_MODES)
+            if (fscanf(f, "controls=%d ", &v) == 1 && v >= 0 && v < NCTRL_MODES)
                 g_ctrl = v;
+            if (fscanf(f, "triggers=%d", &v) == 1)
+                g_swap_trig = v != 0;
             fclose(f);
         }
     }
@@ -1768,6 +1773,17 @@ static actions_t read_input(papp_surface_t *surf, float dt)
     actions_t a = { 0 };
     papp_gamepad_t pad = { 0 };
     uint32_t held = papp_input_gamepad(0, &pad) ? pad.buttons : 0;
+    if (g_swap_trig) {
+        uint16_t t = pad.lt;
+        pad.lt = pad.rt;
+        pad.rt = t;
+        uint32_t l2 = held & PAPP_BTN_L2, r2 = held & PAPP_BTN_R2;
+        held &= ~(PAPP_BTN_L2 | PAPP_BTN_R2);
+        if (l2)
+            held |= PAPP_BTN_R2;
+        if (r2)
+            held |= PAPP_BTN_L2;
+    }
     uint32_t press = held & ~s_prev_btn;
     s_prev_btn = held;
     if (press & (PAPP_BTN_A | PAPP_BTN_B | PAPP_BTN_R1))
@@ -2785,12 +2801,15 @@ static void draw_hud(uint16_t *px, const actions_t *act, float fps)
             text_c(px, 116, "PRESS A OR TAP TO RACE", 0xFFFF, 1);
         if (g_ctrl == CTRL_TWIN) {
             text_c(px, 134, "R STICK STEERS   L STICK UP GAS   DOWN BRAKE   FULL DOWN REV", 0xA534, 1);
-            text_c(px, 144, "A OR L2 BRAKE   X HANDBRAKE   Y BACK ON ROAD   START PAUSE", 0xA534, 1);
+            snprintf(line, sizeof(line), "A OR %s BRAKE   X HANDBRAKE   Y BACK ON ROAD   START PAUSE", g_swap_trig ? "R2" : "L2");
+            text_c(px, 144, line, 0xA534, 1);
         } else if (g_ctrl == CTRL_PAD) {
-            text_c(px, 134, "LEFT/RIGHT OR STICK STEERS   R2 OR UP GAS   A BRAKE", 0xA534, 1);
+            snprintf(line, sizeof(line), "LEFT/RIGHT OR STICK STEERS   %s OR UP GAS   A BRAKE", g_swap_trig ? "L2" : "R2");
+            text_c(px, 134, line, 0xA534, 1);
             text_c(px, 144, "X HANDBRAKE  Y BACK ON ROAD  DOWN REVERSE  START PAUSE", 0xA534, 1);
         } else {
-            text_c(px, 134, "ROLLER STEERS   GAS SLIDER OR R2   A BRAKE   DOWN REVERSE", 0xA534, 1);
+            snprintf(line, sizeof(line), "ROLLER STEERS   GAS SLIDER OR %s   A BRAKE   DOWN REVERSE", g_swap_trig ? "L2" : "R2");
+            text_c(px, 134, line, 0xA534, 1);
             text_c(px, 144, "X HANDBRAKE   Y BACK ON THE ROAD   START PAUSE", 0xA534, 1);
         }
         fmt_time(t1, sizeof(t1), g_best_lap);
@@ -3230,8 +3249,15 @@ static void start_menu(void)
             settings_io(true);
         }
     } else if (r == i_ctl) {
-        int c = menu("Controls", ctrl_name, NCTRL_MODES);
-        if (c >= 0 && c < NCTRL_MODES && c != g_ctrl) {
+        const char *items[NCTRL_MODES + 1];
+        for (int i = 0; i < NCTRL_MODES; i++)
+            items[i] = ctrl_name[i];
+        items[NCTRL_MODES] = g_swap_trig ? "Swap L2 and R2: on" : "Swap L2 and R2: off";
+        int c = menu("Controls", items, NCTRL_MODES + 1);
+        if (c == NCTRL_MODES) {
+            g_swap_trig = !g_swap_trig;
+            settings_io(true);
+        } else if (c >= 0 && c < NCTRL_MODES && c != g_ctrl) {
             g_ctrl = c;
             s_touch_used = c == CTRL_ROLLER;     /* the touch controls show again on a touch */
             settings_io(true);
