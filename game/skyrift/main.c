@@ -2942,7 +2942,7 @@ static int menu(const char *title, const char *const *items, int n)
 /* returns false to exit */
 static bool pause_menu(void)
 {
-    const char *const items[] = { "Resume", "Restart race", "Quit to title", "Exit Skyrift" };
+    const char *const items[] = { "Resume", "Restart race", "Quit to title", "Exit game" };
     int r = menu("Paused", items, 4);
     if (r == 1)
         start_race();
@@ -2955,14 +2955,12 @@ static bool pause_menu(void)
 static bool title_menu(void)
 {
     for (;;) {
-        char trk[40], cls[32], laps[24], team[32], ctl[40], thr[32];
+        char trk[40], cls[32], laps[24], team[32];
         snprintf(trk, sizeof(trk), "Track: %s", g_td->name);
         snprintf(cls, sizeof(cls), "Class: %s", g_cl->name);
         snprintf(laps, sizeof(laps), "Laps: %d", g_laps);
         snprintf(team, sizeof(team), "Team: %s", k_team[g_team].name);
-        snprintf(ctl, sizeof(ctl), "Steering: %s", ctrl_name[g_ctrl]);
-        snprintf(thr, sizeof(thr), "Thrust: %s", g_autothrust ? "automatic" : "A / R2 / UP");
-        const char *items[7] = { "Start race", trk, cls, laps, team, ctl, thr };
+        const char *items[7] = { "Start race", trk, cls, laps, team, "Controls", "Exit game" };
         int r = menu("Skyrift", items, 7);
         if (r < 0)
             return !papp_exit_requested();
@@ -2970,6 +2968,8 @@ static bool title_menu(void)
             start_race();
             return true;
         }
+        if (r == 6)
+            return false;
         if (r == 1) {
             const char *names[NTRACKS];
             for (int i = 0; i < NTRACKS; i++)
@@ -3004,9 +3004,19 @@ static bool title_menu(void)
             if (c >= 0)
                 g_team = c;
         } else if (r == 5) {
-            g_ctrl = (g_ctrl + 1) % NCTRL;
-        } else if (r == 6) {
-            g_autothrust = !g_autothrust;
+            for (;;) {
+                char ctl[40], thr[32];
+                snprintf(ctl, sizeof(ctl), "Steering: %s", ctrl_name[g_ctrl]);
+                snprintf(thr, sizeof(thr), "Thrust: %s", g_autothrust ? "automatic" : "A / R2 / UP");
+                const char *ci[3] = { ctl, thr, "Back" };
+                int c = menu("Controls", ci, 3);
+                if (c == 0)
+                    g_ctrl = (g_ctrl + 1) % NCTRL;
+                else if (c == 1)
+                    g_autothrust = !g_autothrust;
+                else
+                    break;
+            }
         }
         settings_io(true);
     }
