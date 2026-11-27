@@ -50,7 +50,9 @@ enum { L_FLOOR, L_SHADOW, L_OPAQUE, L_FX, NLAYERS };
  * lines two, the glow corner 0 (x[1]: its radius). */
 #define SUB   16                   /* screen positions: 12.4 */
 #define WONE  1073741824.f         /* depth 1/x: 2.30 */
-#define GB    1800.f               /* guard band: corners stay this close to the centre (x < 2048 in 12.4) */
+/* guard band: corners stay this close to the centre, so that they fit 12.4 (|x| < 2048): 1800 px,
+   less on frames wider or taller than about 490 px (e3d_create works it out) */
+#define GB    (e->gb)
 typedef union {
     struct {
         int32_t w[3];
@@ -132,6 +134,7 @@ typedef struct {
 
 struct e3d {
     int w, h;
+    float gb;                      /* the guard band, GB */
     uint16_t *fb;
     int stride;
     const uint16_t *bg;
@@ -222,6 +225,10 @@ e3d_t *e3d_create(int width, int height, int threads)
         return NULL;
     e->w = width;
     e->h = height;
+    {
+        int half = (width > height ? width : height) / 2;
+        e->gb = half + 1800 < 2040 ? 1800.f : (float)(2040 - half);
+    }
     e->nbands = (height + TILE_H - 1) / TILE_H;
     e->geo[0].bins = calloc((size_t)e->nbands * NLAYERS, sizeof(bin_t));
     e->geo[1].bins = calloc((size_t)e->nbands * NLAYERS, sizeof(bin_t));
