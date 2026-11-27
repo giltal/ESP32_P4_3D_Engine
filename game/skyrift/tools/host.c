@@ -6,7 +6,7 @@
  *   gcc -O2 -DE3D_HOST -DSKY_HOST -I e3d/include -I e3d/src -I <launcher>/papp-sdk/include \
  *       -I <launcher>/components/papp_abi/include -o skyrift_sim game/skyrift/tools/host.c \
  *       e3d/src/e3d.c e3d/src/e3d_render.c -lm
- *   ./skyrift_sim <track> <class> <mode> <seconds> <shot every s>
+ *   ./skyrift_sim <track> <class> <mode> <seconds> <shot every s> [res 0..3]
  *   mode: 0 = race (computer), 1 = title attract, 2 = icon close-up, 3 = race with player input
  */
 #define SKY_HOST 1
@@ -48,8 +48,11 @@ int main(int argc, char **argv)
     g_track_i = trk; g_td = &k_track[trk];
     g_class = cls; g_cl = &k_class[cls];
     g_laps = 3;
+    g_res = argc > 6 ? atoi(argv[6]) : 1;
+    g_w = k_res[g_res][0];
+    g_h = k_res[g_res][1];
     srand(1);
-    static uint16_t px[W * H];
+    static uint16_t px[WMAX * HMAX];
     e3d_t *e = e3d_create(W, H, 1);
     g_e = e;
     if (!(e && b_init() && make_meshes() && track_build())) { fprintf(stderr, "build failed\n"); return 1; }
