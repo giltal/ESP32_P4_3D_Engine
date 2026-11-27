@@ -30,7 +30,8 @@
  *          top left absorbs, the top-right corner pauses.
  *
  * Arguments: `auto` = the computer flies your ship too (testing),
- *            `fps` = show the frame rate, `track N`, `class N`, `laps N`.
+ *            `fps` = show the frame rate, `track N`, `class N`, `laps N`,
+ *            `res N` = frame size 0..3 (400x240, 480x288, 560x336, 640x384; also in Settings).
  */
 #include "papp/papp.h"
 #include "e3d.h"
@@ -43,8 +44,16 @@
 
 PAPP_MANIFEST(.id = "michael.skyrift", .name = "Skyrift", .version = PAPP_APP_VERSION, .main_stack = 16384);
 
-#define W 400
-#define H 240
+/* the frame is drawn at one of these sizes and scaled to the display; bigger is sharper and slower */
+#define WMAX 640
+#define HMAX 384
+static const int k_res[][2] = { { 400, 240 }, { 480, 288 }, { 560, 336 }, { 640, 384 } };
+static const char *const k_res_name[] = { "400 x 240 (fastest)", "480 x 288", "560 x 336", "640 x 384 (slowest)" };
+#define NRES ((int)(sizeof(k_res) / sizeof(k_res[0])))
+static int g_res = 1;
+static int g_w = 480, g_h = 288;
+#define W g_w
+#define H g_h
 #define DEG (180.f / (float)M_PI)
 #define RAD ((float)M_PI / 180.f)
 #define NC(a) ((int)(sizeof(a) / sizeof(a[0])))
@@ -824,7 +833,7 @@ static void road_neon(int k0, int k1, int step, bool far)
         b_quad_n(b_vp(a[0][1]), b_vp(a[0][2]), b_vp(a[1][2]), b_vp(a[1][1]), td->neon, sa->u);
         b_quad_n(b_vp(a[0][4]), b_vp(a[0][5]), b_vp(a[1][5]), b_vp(a[1][4]), td->neon, sa->u);
         /* tunnel: two light strips on the ceiling */
-        if ((sa->fl & CF_TUNNEL) && !far && (k / 2) % 2 == 0) {
+        if ((sa->fl & CF_TUNNEL) && !far && k % 4 == 0) {
             float u0 = (float)ka * STEP, u1 = u0 + STEP * 1.5f;
             float hw = hwa;
             float p[4][3], nd[3] = { -sa->u[0], -sa->u[1], -sa->u[2] };
@@ -1059,10 +1068,10 @@ static bool build_chunks(void)
             k1 = g_ns;
         for (int l = 0; l < 2; l++) {
             b_reset();
-            road_lit(k0, k1, l ? 4 : 2, l == 1);
+            road_lit(k0, k1, l ? 4 : 1, l == 1);
             c->road[l] = b_bake(25.f);
             b_reset();
-            road_neon(k0, k1, l ? 4 : 2, l == 1);
+            road_neon(k0, k1, l ? 4 : 1, l == 1);
             c->rneon[l] = b_bake(25.f);
             if (!c->road[l] || !c->rneon[l])
                 return false;
@@ -1131,7 +1140,7 @@ static const team_t k_team[NSHIPS] = {
     { "RAPTA", 0x26262C, 0xFF7010, 0xFF7010 },
     { "ZENITH", 0x20B060, 0xE8E8EC, 0x104030 },
 };
-static e3d_mesh *m_ship[NSHIPS], *m_flame, *m_blob, *m_spark, *m_rocket, *m_mine, *m_shield;
+static e3d_mesh *m_ship[NSHIPS], *m_ship_hi[NSHIPS], *m_flame, *m_blob, *m_spark, *m_rocket, *m_mine, *m_shield;
 
 /* a hexagonal ring (y, z) of width w, top and bottom heights */
 static void hex_ring(float (*r)[2], float w, float top, float bot)
@@ -1209,10 +1218,132 @@ static e3d_mesh *make_ship(const team_t *t)
     return b_bake(35.f);
 }
 
+
+/* ── The detailed ships, for those near the camera ─────────────────────────
+ * Rounded cross-sections (a superellipse, flatter underneath), swept wings, fins on the
+ * pods with a spoiler between them, intakes and nozzles: about 600 triangles. */
+#define HR 12      /* points round the fuselage */
+#define HP 10      /* round a pod */
+typedef struct { float x, cy, rz, top, bot; } sect_t;
+
+/* ring point i of n: from the bottom round the right side, over the top and back */
+static void round_ring(float (*r)[2], int n, const sect_t *s)
+{
+    for (int i = 0; i < n; i++) {
+        float a = -(float)M_PI * 0.5f + 2.f * (float)M_PI * ((float)i + 0.5f) / (float)n;
+        float sa = sinf(a), ca = cosf(a);
+        float ys = sa < 0 ? -powf(-sa, 0.8f) : powf(sa, 0.8f), zs = ca < 0 ? -powf(-ca, 0.8f) : powf(ca, 0.8f);
+        r[i][0] = s->cy + ys * (sa < 0 ? s->bot : s->top);
+        r[i][1] = zs * s->rz;
+    }
+}
+
+/* the colour of the face between ring points i and i+1 of n: under, sides, top, a stripe along the top */
+static uint32_t ring_rgb(int i, int n, const team_t *t, bool stripe, bool sec_sides)
+{
+    float a = -(float)M_PI * 0.5f + 2.f * (float)M_PI * ((float)i + 1.f) / (float)n;
+    float sa = sinf(a), ca = cosf(a);
+    if (sa < -0.45f)
+        return 0x2A2E36;
+    if (sa > 0.55f)
+        return stripe && fabsf(ca) < 0.45f ? t->stripe : t->prim;
+    return sec_sides ? t->sec : shade_rgb(t->prim, 0.9f);
+}
+
+static void loft_sections(const sect_t *sec, int nr, int n, float zoff, const team_t *t, int stripe_from, int stripe_to,
+                          bool sec_sides, uint32_t cap)
+{
+    static float ring[12 * 12][2];
+    static uint32_t band[12 * 12];
+    float xs[12];
+    for (int k = 0; k < nr; k++) {
+        xs[k] = sec[k].x;
+        round_ring(&ring[k * n], n, &sec[k]);
+    }
+    for (int k = 0; k + 1 < nr; k++)
+        for (int i = 0; i < n; i++)
+            band[k * n + i] = ring_rgb(i, n, t, k >= stripe_from && k <= stripe_to, sec_sides);
+    b_loft(xs, (const float (*)[2])ring, nr, n, zoff, band, cap);
+}
+
+/* a flat convex plate: outline (a, b) pairs in the plane of axes ia and ib, thickness along the third */
+static void b_plate(const float (*p)[2], int n, int ia, int ib, float t0, float t1, uint32_t rgb, uint32_t edge)
+{
+    int ic = 3 - ia - ib, base = B.nv;
+    float c[3] = { 0, 0, 0 };
+    for (int e = 0; e < 2; e++)
+        for (int i = 0; i < n; i++) {
+            float v[3];
+            v[ia] = p[i][0];
+            v[ib] = p[i][1];
+            v[ic] = e ? t1 : t0;
+            b_v(v[0], v[1], v[2]);
+            for (int q = 0; q < 3; q++)
+                c[q] += v[q] / (float)(2 * n);
+        }
+    for (int i = 1; i + 1 < n; i++) {
+        b_tri(base, base + i, base + i + 1, rgb, c);
+        b_tri(base + n, base + n + i, base + n + i + 1, rgb, c);
+    }
+    for (int i = 0; i < n; i++) {
+        int j = (i + 1) % n;
+        b_quad(base + i, base + j, base + n + j, base + n + i, edge, c);
+    }
+}
+
+static e3d_mesh *make_ship_hi(const team_t *t)
+{
+    b_reset();
+    /* fuselage */
+    static const sect_t fus[8] = {
+        { 3.05f, 0.10f, 0.05f, 0.04f, 0.03f }, { 2.45f, 0.12f, 0.28f, 0.14f, 0.10f }, { 1.55f, 0.15f, 0.50f, 0.26f, 0.16f },
+        { 0.50f, 0.18f, 0.68f, 0.40f, 0.18f }, { -0.60f, 0.20f, 0.78f, 0.42f, 0.20f }, { -1.50f, 0.20f, 0.74f, 0.36f, 0.20f },
+        { -2.10f, 0.18f, 0.58f, 0.28f, 0.16f }, { -2.35f, 0.18f, 0.40f, 0.18f, 0.10f },
+    };
+    loft_sections(fus, 8, HR, 0.f, t, 1, 4, false, 0x18181C);
+    /* pods: a stripe on the nose, dark nozzles at the back */
+    static const sect_t pod[7] = {
+        { 2.50f, 0.08f, 0.06f, 0.05f, 0.04f }, { 2.10f, 0.08f, 0.22f, 0.16f, 0.14f }, { 1.30f, 0.08f, 0.32f, 0.22f, 0.20f },
+        { -0.50f, 0.08f, 0.36f, 0.25f, 0.22f }, { -1.60f, 0.08f, 0.34f, 0.24f, 0.20f }, { -2.10f, 0.08f, 0.28f, 0.20f, 0.16f },
+        { -2.30f, 0.08f, 0.22f, 0.15f, 0.12f },
+    };
+    for (int s = -1; s <= 1; s += 2) {
+        loft_sections(pod, 7, HP, (float)s * 1.35f, t, 0, 1, true, 0x101014);
+        /* an intake on the inner side of the pod's nose */
+        b_box(1.2f, 0.0f, (float)s * 1.35f - 0.12f, 1.6f, 0.18f, (float)s * 1.35f + 0.12f, 0x101014, false);
+        /* swept fin on the pod */
+        static const float fin[4][2] = { { -0.9f, 0.25f }, { -2.15f, 0.25f }, { -2.45f, 0.98f }, { -1.75f, 0.98f } };
+        b_plate(fin, 4, 0, 1, (float)s * 1.35f - 0.05f, (float)s * 1.35f + 0.05f, t->prim, t->sec);
+    }
+    /* swept wings between fuselage and pods */
+    for (int s = -1; s <= 1; s += 2) {
+        float z0 = 0.55f * (float)s, z1 = 1.15f * (float)s;
+        const float w[4][2] = { { 0.9f, z0 }, { -1.4f, z0 }, { -1.7f, z1 }, { 0.1f, z1 } };
+        b_plate(w, 4, 0, 2, 0.06f, 0.16f, t->sec, shade_rgb(t->sec, 0.7f));
+    }
+    /* spoiler across the fin tops, and the tail fin */
+    {
+        const float sp[4][2] = { { -1.85f, -1.42f }, { -2.45f, -1.42f }, { -2.45f, 1.42f }, { -1.85f, 1.42f } };
+        b_plate(sp, 4, 0, 2, 0.90f, 0.97f, t->stripe, shade_rgb(t->stripe, 0.7f));
+        static const float tf[4][2] = { { -0.8f, 0.50f }, { -2.10f, 0.45f }, { -2.30f, 1.10f }, { -1.70f, 1.10f } };
+        b_plate(tf, 4, 0, 1, -0.05f, 0.05f, t->stripe, t->prim);
+    }
+    /* canopy: glass with a light band along the top */
+    {
+        static const sect_t can[5] = {
+            { 1.25f, 0.42f, 0.04f, 0.02f, 0.01f }, { 0.80f, 0.46f, 0.22f, 0.14f, 0.04f }, { 0.00f, 0.50f, 0.32f, 0.22f, 0.04f },
+            { -0.80f, 0.50f, 0.30f, 0.16f, 0.04f }, { -1.20f, 0.48f, 0.15f, 0.06f, 0.02f },
+        };
+        team_t glass = { "", 0x1C3048, 0x24405C, 0x5C8CB0 };
+        loft_sections(can, 5, HP, 0.f, &glass, 1, 3, true, 0x1C3048);
+    }
+    return b_bake(40.f);
+}
+
 static bool make_meshes(void)
 {
     for (int i = 0; i < NSHIPS; i++)
-        if (!(m_ship[i] = make_ship(&k_team[i])))
+        if (!(m_ship[i] = make_ship(&k_team[i])) || !(m_ship_hi[i] = make_ship_hi(&k_team[i])))
             return false;
     /* engine flame: a square pyramid pointing back (-x) */
     b_reset();
@@ -1267,7 +1398,8 @@ static void free_meshes(void)
 {
     for (int i = 0; i < NSHIPS; i++) {
         e3d_mesh_free(m_ship[i]);
-        m_ship[i] = NULL;
+        e3d_mesh_free(m_ship_hi[i]);
+        m_ship[i] = m_ship_hi[i] = NULL;
     }
     e3d_mesh_free(m_flame);
     e3d_mesh_free(m_blob);
@@ -1292,6 +1424,8 @@ static const class_t *g_cl = &k_class[1];
 #define SPEED_KMH 5.6f       /* m/s to the km/h on the speedo (it is the future) */
 #define SHIP_HALF 1.25f      /* half width, for the walls */
 #define HOVER     0.95f
+#define SHIP_HI_DIST 70.f    /* the detailed ship model within this distance of the camera */
+#define NEAR_TRACK   90.f    /* the track in full detail (a section every 2 m) this near, every 8 m beyond */
 
 /* ── Ships ─────────────────────────────────────────────────────────────── */
 enum { WPN_NONE, WPN_ROCKET, WPN_MINES, WPN_TURBO, WPN_SHIELD, NWPN };
@@ -1864,8 +1998,8 @@ static void settings_io(bool save)
         mkdir(DATA_DIR, 0777);
         FILE *f = fopen(SET_PATH, "w");
         if (f) {
-            fprintf(f, "track=%d\nclass=%d\nlaps=%d\ncontrols=%d\nauto=%d\nteam=%d\n", g_track_i, g_class, g_laps, g_ctrl,
-                    g_autothrust ? 1 : 0, g_team);
+            fprintf(f, "track=%d\nclass=%d\nlaps=%d\ncontrols=%d\nauto=%d\nteam=%d\nres=%d\n", g_track_i, g_class, g_laps,
+                    g_ctrl, g_autothrust ? 1 : 0, g_team, g_res);
             fclose(f);
         }
     } else {
@@ -1877,7 +2011,8 @@ static void settings_io(bool save)
             if (fscanf(f, "laps=%d ", &v) == 1 && v >= 1 && v <= 9) g_laps = v;
             if (fscanf(f, "controls=%d ", &v) == 1 && v >= 0 && v < NCTRL) g_ctrl = v;
             if (fscanf(f, "auto=%d ", &v) == 1) g_autothrust = v != 0;
-            if (fscanf(f, "team=%d", &v) == 1 && v >= 0 && v < NSHIPS) g_team = v;
+            if (fscanf(f, "team=%d ", &v) == 1 && v >= 0 && v < NSHIPS) g_team = v;
+            if (fscanf(f, "res=%d", &v) == 1 && v >= 0 && v < NRES) g_res = v;
             fclose(f);
         }
     }
@@ -2304,9 +2439,9 @@ static uint16_t s_sky_tab[512];           /* sky colour by rows above the horizo
 static uint16_t s_c_near, s_c_far, s_c_win, s_c_sun;
 
 typedef struct { int32_t x, z, dx, dz; uint16_t c0, c1; uint8_t grid, pad; } grow_t;
-static grow_t   s_gr[H];
-static uint16_t s_col[W];
-static uint16_t s_rowwin[H];
+static grow_t   s_gr[HMAX];
+static uint16_t s_col[WMAX];
+static uint16_t s_rowwin[HMAX];
 static int      s_hz;                     /* the horizon row this frame */
 
 static void make_background(void)
@@ -2447,7 +2582,8 @@ static void bg_row(uint16_t *row, int y, int w, void *ctx)
 }
 
 /* ── Drawing the world ─────────────────────────────────────────────────── */
-/* how far the track and scenery are drawn: eased down when the frame rate drops, back up when it recovers */
+/* how far the track and scenery are drawn: eased down when the frame rate drops, back up when it recovers.
+   The distances of the detailed ships and the detailed track shrink in proportion. */
 static float g_view = 520.f;
 static void view_adapt(float fps)
 {
@@ -2478,8 +2614,12 @@ static void draw_ship(e3d_t *e, const ship_t *s, const float *cp)
         return;
     e3d_mat m = mat_basis(s->pos, s->fwd, s->up, s->right, 1.f);
     bool flash = s->hit_t > 0 && ((int)(s->hit_t * 20.f) & 1);
-    draw_obj(e, m_ship[s->team], &m, s->dead ? 0x202024 : flash ? 0xFFFFFF : -1, E3D_NO_SHADOW);
-    float dx = s->pos[0] - cp[0], dz = s->pos[2] - cp[2];
+    float dx = s->pos[0] - cp[0], dy = s->pos[1] - cp[1], dz = s->pos[2] - cp[2];
+    float d2 = dx * dx + dy * dy + dz * dz;
+    /* the detailed model near the camera (a few hundred triangles), the simple one further off */
+    float hd = SHIP_HI_DIST * g_view / 520.f;   /* shrinks with the draw distance on a slow frame */
+    const e3d_mesh *mesh = d2 < hd * hd ? m_ship_hi[s->team] : m_ship[s->team];
+    draw_obj(e, mesh, &m, s->dead ? 0x202024 : flash ? 0xFFFFFF : -1, E3D_NO_SHADOW);
     bool near = dx * dx + dz * dz < 140.f * 140.f;
     /* the shadow on the track */
     if (near) {
@@ -2520,17 +2660,18 @@ static void draw_scene(e3d_t *e)
     const track_def_t *td = g_td;
     e3d_camera *cam = e3d_cam(e);
     *cam = (e3d_camera){ .pos = { g_cam_p[0], g_cam_p[1], g_cam_p[2] }, .heading = g_cam_h, .pitch = g_cam_pitch };
-    e3d_set_focal(e, g_focal);
+    float focal = g_focal * (float)W / 400.f;     /* the same view at any frame size */
+    e3d_set_focal(e, focal);
     const ship_t *w = &g_ship[g_watch];
     *e3d_light_get(e) = (e3d_light){ .pos = { w->pos[0] + td->light[0], w->pos[1] + td->light[1], w->pos[2] + td->light[2] },
                                      .r = (float)(td->light_rgb >> 16), .g = (float)((td->light_rgb >> 8) & 255),
                                      .b = (float)(td->light_rgb & 255) };
-    background_frame(cam, g_focal);
+    background_frame(cam, focal);
 
     float hd = g_cam_h * RAD, pt = g_cam_pitch * RAD;
     float fwd[3] = { cosf(pt) * cosf(hd), sinf(pt), cosf(pt) * sinf(hd) };
     float right[3] = { -sinf(hd), 0, cosf(hd) };
-    float tanx = (W * 0.5f + 8.f) / g_focal;
+    float tanx = (W * 0.5f + 8.f) / focal;
     const float *cp = cam->pos;
     e3d_mat id;
     e3d_identity(&id);
@@ -2538,7 +2679,7 @@ static void draw_scene(e3d_t *e)
         const chunk_t *k = &g_chunk[i];
         if (in_view(k->c, k->r, g_view, cp, fwd, right, tanx)) {
             float d[3] = { k->c[0] - cp[0], k->c[1] - cp[1], k->c[2] - cp[2] };
-            int lod = sqrtf(v3_dot(d, d)) - k->r > 150.f ? 1 : 0;
+            int lod = sqrtf(v3_dot(d, d)) - k->r > NEAR_TRACK * g_view / 520.f ? 1 : 0;
             draw_obj(e, k->road[lod], &id, -1, E3D_NO_SHADOW);
             draw_obj(e, k->rneon[lod], &id, -1, E3D_UNLIT | E3D_NO_SHADOW);
         }
@@ -2926,6 +3067,57 @@ static int presenter_main(void *arg)
     return 0;
 }
 
+/* the surface, the two frames and the renderer, at the size g_res picks */
+static uint16_t *g_fb[2];
+static bool g_res_dirty;
+
+static void video_close(void)
+{
+    if (g_e) {
+        e3d_destroy(g_e);
+        g_e = NULL;
+    }
+    for (int i = 0; i < 2; i++) {
+        papp_free(g_fb[i]);
+        g_fb[i] = NULL;
+    }
+    if (g_surf) {
+        papp_disp_surface_destroy(g_surf);
+        g_surf = NULL;
+    }
+}
+
+static bool video_open(void)
+{
+    g_w = k_res[g_res][0];
+    g_h = k_res[g_res][1];
+    papp_surface_cfg_t cfg = { .width = (uint16_t)W, .height = (uint16_t)H, .format = PAPP_PIXFMT_RGB565,
+                               .scale = PAPP_SCALE_FIT_ASPECT, .buffers = 1 };
+    g_surf = papp_disp_surface_create(&cfg);
+    for (int i = 0; i < 2; i++)
+        g_fb[i] = papp_alloc(sizeof(uint16_t) * (size_t)(W * H), PAPP_MEM_LARGE | PAPP_MEM_DMA, 64);
+    g_e = g_surf && g_fb[0] && g_fb[1] ? e3d_create(W, H, 2) : NULL;
+    if (!g_e)
+        return false;
+    e3d_set_background_rows(g_e, bg_row, NULL);
+    apply_look(g_e);
+    papp_log("skyrift: drawing at %d x %d\n", W, H);
+    return true;
+}
+
+/* open at g_res, falling back to the smallest size */
+static bool video_open_any(void)
+{
+    if (video_open())
+        return true;
+    video_close();
+    if (g_res == 0)
+        return false;
+    papp_log("skyrift: no memory for %d x %d, using %d x %d\n", W, H, k_res[0][0], k_res[0][1]);
+    g_res = 0;
+    return video_open();
+}
+
 static int menu(const char *title, const char *const *items, int n)
 {
     papp_sem_take(g_pres_done, PAPP_WAIT_FOREVER);   /* nothing is being presented now */
@@ -2960,7 +3152,7 @@ static bool title_menu(void)
         snprintf(cls, sizeof(cls), "Class: %s", g_cl->name);
         snprintf(laps, sizeof(laps), "Laps: %d", g_laps);
         snprintf(team, sizeof(team), "Team: %s", k_team[g_team].name);
-        const char *items[7] = { "Start race", trk, cls, laps, team, "Controls", "Exit game" };
+        const char *items[7] = { "Start race", trk, cls, laps, team, "Settings", "Exit game" };
         int r = menu("Skyrift", items, 7);
         if (r < 0)
             return !papp_exit_requested();
@@ -3005,16 +3197,23 @@ static bool title_menu(void)
                 g_team = c;
         } else if (r == 5) {
             for (;;) {
-                char ctl[40], thr[32];
+                char ctl[40], thr[32], res[40];
                 snprintf(ctl, sizeof(ctl), "Steering: %s", ctrl_name[g_ctrl]);
                 snprintf(thr, sizeof(thr), "Thrust: %s", g_autothrust ? "automatic" : "A / R2 / UP");
-                const char *ci[3] = { ctl, thr, "Back" };
-                int c = menu("Controls", ci, 3);
+                snprintf(res, sizeof(res), "Resolution: %d x %d", k_res[g_res][0], k_res[g_res][1]);
+                const char *ci[4] = { ctl, thr, res, "Back" };
+                int c = menu("Settings", ci, 4);
                 if (c == 0)
                     g_ctrl = (g_ctrl + 1) % NCTRL;
                 else if (c == 1)
                     g_autothrust = !g_autothrust;
-                else
+                else if (c == 2) {
+                    int q = menu("Resolution", k_res_name, NRES);
+                    if (q >= 0 && q != g_res) {
+                        g_res = q;
+                        g_res_dirty = true;     /* applied when the menu closes */
+                    }
+                } else
                     break;
             }
         }
@@ -3036,6 +3235,8 @@ int main(int argc, char **argv)
             g_class = (int)clampf((float)atoi(argv[++i]), 0, NCLASSES - 1);
         else if (!strcmp(argv[i], "laps") && i + 1 < argc)
             g_laps = (int)clampf((float)atoi(argv[++i]), 1, 9);
+        else if (!strcmp(argv[i], "res") && i + 1 < argc)
+            g_res = (int)clampf((float)atoi(argv[++i]), 0, NRES - 1);
     }
     g_td = &k_track[g_track_i];
     g_cl = &k_class[g_class];
@@ -3045,27 +3246,18 @@ int main(int argc, char **argv)
     if (g_ctrl == CTRL_ROLLER)
         g_autothrust = true;
 
-    papp_surface_cfg_t cfg = { .width = W, .height = H, .format = PAPP_PIXFMT_RGB565,
-                               .scale = PAPP_SCALE_FIT_ASPECT, .buffers = 1 };
-    g_surf = papp_disp_surface_create(&cfg);
-    uint16_t *fb[2];
-    for (int i = 0; i < 2; i++)
-        fb[i] = papp_alloc(sizeof(uint16_t) * W * H, PAPP_MEM_LARGE | PAPP_MEM_DMA, 64);
     g_pres_go = papp_sem_create(0, 1);
     g_pres_done = papp_sem_create(1, 1);
+    bool vid = g_pres_go && g_pres_done && video_open_any();
     papp_thread_cfg_t pcfg = { .name = "sr_present", .stack_size = 4096, .prio = PAPP_PRIO_HIGH, .core = 0 };
-    papp_thread_t *pres = (g_surf && fb[0] && fb[1] && g_pres_go && g_pres_done)
-                              ? papp_thread_create(presenter_main, NULL, &pcfg) : NULL;
-    e3d_t *e = e3d_create(W, H, 2);
-    g_e = e;
+    papp_thread_t *pres = vid ? papp_thread_create(presenter_main, NULL, &pcfg) : NULL;
+    e3d_t *e = g_e;
     bool ok = pres && e && b_init() && make_meshes() && track_build();
     b_free();
     if (!ok) {
         papp_log("skyrift: out of memory\n");
         return 1;
     }
-    e3d_set_background_rows(e, bg_row, NULL);
-    apply_look(e);
     records_io(false);
 
     g_snd_lock = papp_mutex_create(false);
@@ -3099,6 +3291,16 @@ int main(int argc, char **argv)
         if (g_state == ST_TITLE) {
             if (go || in.pause) {
                 run = title_menu();
+                if (g_res_dirty && run) {
+                    /* a new frame size: nothing may be on its way to the display while it changes */
+                    g_res_dirty = false;
+                    papp_sem_take(g_pres_done, PAPP_WAIT_FOREVER);
+                    video_close();
+                    run = video_open_any();
+                    papp_sem_give(g_pres_done);
+                    e = g_e;
+                    cur = 0;
+                }
                 last = papp_time_us();
                 continue;
             }
@@ -3116,7 +3318,7 @@ int main(int argc, char **argv)
             start_race();
         update(&in, dt);
 
-        uint16_t *px = fb[cur];
+        uint16_t *px = g_fb[cur];
         e3d_begin(e, px, W);
         draw_scene(e);
         e3d_end(e);
@@ -3156,14 +3358,11 @@ int main(int argc, char **argv)
     if (g_snd_lock)
         papp_mutex_destroy(g_snd_lock);
     settings_io(true);
-    e3d_destroy(e);
+    video_close();
     free_track();
     free_meshes();
     papp_sem_destroy(g_pres_go);
     papp_sem_destroy(g_pres_done);
-    papp_free(fb[0]);
-    papp_free(fb[1]);
-    papp_disp_surface_destroy(g_surf);
     return 0;
 }
 #endif /* !SKY_HOST */
